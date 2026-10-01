@@ -183,11 +183,8 @@ Renders nothing.
 {{- end -}}
 
 {{- if .Values.apiKeysSecret.create -}}
-{{- if not (and (dig "callerKeys" "enabled" false $g) (dig "callerKeys" "secretName" "" $g) (dig "callerKeys" "secretKey" "" $g)) -}}
-{{- fail "llm-gateway-stack: apiKeysSecret.create needs gateway caller keys: set llm-api-gateway.llmApiGateway.callerKeys.enabled, secretName and secretKey" -}}
-{{- end -}}
-{{- if dig "config" "nvcfGrpcAddr" "" $g -}}
-{{- fail "llm-gateway-stack: caller keys and NVCF auth are mutually exclusive: set llm-api-gateway.llmApiGateway.config.nvcfGrpcAddr to \"\"" -}}
+{{- if not (and (eq (dig "auth" "mode" "nvcf" $g) "callerKeys") (dig "auth" "callerKeys" "secretName" "" $g) (dig "auth" "callerKeys" "secretKey" "" $g)) -}}
+{{- fail "llm-gateway-stack: apiKeysSecret.create needs gateway caller keys: set llm-api-gateway.llmApiGateway.auth.mode to callerKeys, and auth.callerKeys.secretName and secretKey" -}}
 {{- end -}}
 {{- $ids := list -}}
 {{- $digests := list -}}

@@ -190,7 +190,7 @@ Useful overrides:
   `X-Routing-Key` headers are not forwarded. Do not enable it where untrusted
   callers can reach the gateway.
 - `CALLER_KEYS_FILE` to authenticate callers with static API keys instead of
-  NVCF auth (Helm: `callerKeys`). The YAML file lists `keys` entries, each an
+  NVCF auth (Helm: `auth.mode: callerKeys`). The YAML file lists `keys` entries, each an
   `id` and the hex SHA-256 of a key; it holds no plain keys. Every route except
   `/healthz`, `/readyz`, and `/info` then needs `Authorization: Bearer <key>`
   and returns 401 without a listed key. The key is not forwarded to the
@@ -199,7 +199,7 @@ Useful overrides:
   to load or validate keeps the previous keys and logs an error. It cannot be
   combined with `NVCF_GRPC_ADDR`.
 - `ALLOW_ANONYMOUS=true` to start without caller authentication and admit
-  callers without a key (Helm: `config.allowAnonymous`). The gateway logs a
+  callers without a key (Helm: `auth.mode: anonymous`). The gateway logs a
   warning at startup. It cannot be combined with `NVCF_GRPC_ADDR` or
   `CALLER_KEYS_FILE`.
 - `PUBLIC_READ_ENDPOINTS=true` to serve `GET /v1/models`, `GET /v1/models/{id}`,

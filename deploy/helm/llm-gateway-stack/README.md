@@ -193,14 +193,13 @@ reads the names of the Secrets it renders, so change them there.
 | `llm-request-router.llmRequestRouter.tls.quicInsecure` | `false` |
 | `llm-api-gateway.llmApiGateway.replicaCount` | `1` |
 | `llm-api-gateway.llmApiGateway.config.requestRouterUrl` | `http://llm-request-router:8000` |
-| `llm-api-gateway.llmApiGateway.config.nvcfGrpcAddr` | `""` |
 | `llm-api-gateway.llmApiGateway.config.bareModelNamesEnabled` | `true` |
 | `llm-api-gateway.llmApiGateway.config.publicReadEndpoints` | `true` |
 | `llm-api-gateway.llmApiGateway.config.rateLimitEnabled` | `false` |
 | `llm-api-gateway.llmApiGateway.olric.enabled` | `false` |
-| `llm-api-gateway.llmApiGateway.callerKeys.enabled` | `true` |
-| `llm-api-gateway.llmApiGateway.callerKeys.secretName` | `llm-gateway-stack-api-keys` |
-| `llm-api-gateway.llmApiGateway.callerKeys.secretKey` | `caller-keys.yaml` |
+| `llm-api-gateway.llmApiGateway.auth.mode` | `callerKeys` |
+| `llm-api-gateway.llmApiGateway.auth.callerKeys.secretName` | `llm-gateway-stack-api-keys` |
+| `llm-api-gateway.llmApiGateway.auth.callerKeys.secretKey` | `caller-keys.yaml` |
 | `llm-api-gateway.llmApiGateway.vault.enabled` | `false` |
 | `llm-api-gateway.llmApiGateway.tls.enabled` | `true` |
 | `llm-api-gateway.llmApiGateway.tls.existingSecret` | `llm-gateway-stack-gateway-tls` |

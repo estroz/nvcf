@@ -83,12 +83,9 @@ llmApiGateway:
     # prefix and no NVCF auth. For deployments without the NVCF control plane.
     # Do not enable where untrusted callers can reach the gateway.
     bareModelNamesEnabled: false
-    # Start without caller authentication and admit callers without a key.
-    # The gateway refuses to start with neither nvcfGrpcAddr nor callerKeys
-    # unless this is true, and refuses to start when it is combined with them.
-    allowAnonymous: false
-    # With callerKeys, serve GET /v1/models, /v1/models/{id} and /v1/registry
-    # without a key. Inference still needs one. Logged as a warning at startup.
+    # With auth.mode callerKeys, serve GET /v1/models, /v1/models/{id} and
+    # /v1/registry without a key. Inference still needs one. Logged as a
+    # warning at startup.
     publicReadEndpoints: false
     localFunctionId: ""
     defaultModel: ""
@@ -129,18 +126,21 @@ llmApiGateway:
     enabled: true
     audience: ""
 
-  # Authenticate callers with static API keys instead of NVCF auth, for
-  # deployments without the NVCF control plane. Mutually exclusive with NVCF
-  # auth: set config.nvcfGrpcAddr to "" or the gateway refuses to start.
-  callerKeys:
-    enabled: false
-    # Existing Secret holding the caller key file, which lists hashes only:
-    #   keys:
-    #     - id: demo-ui
-    #       sha256: <64 hex SHA-256 of the key>
-    secretName: ""
-    # Key in the Secret that holds the file.
-    secretKey: caller-keys.yaml
+  auth:
+    # How the gateway authenticates callers:
+    #   nvcf        NVCF auth at config.nvcfGrpcAddr.
+    #   callerKeys  Static API keys from auth.callerKeys, for deployments
+    #               without the NVCF control plane.
+    #   anonymous   No caller authentication: every caller is admitted.
+    mode: nvcf
+    callerKeys:
+      # Existing Secret holding the caller key file, which lists hashes only:
+      #   keys:
+      #     - id: demo-ui
+      #       sha256: <64 hex SHA-256 of the key>
+      secretName: ""
+      # Key in the Secret that holds the file.
+      secretKey: caller-keys.yaml
 
   # Serve the listener over TLS. The kubernetes.io/tls Secret existingSecret is
   # mounted at /etc/llm-api-gateway/tls and the probes use HTTPS. The gateway

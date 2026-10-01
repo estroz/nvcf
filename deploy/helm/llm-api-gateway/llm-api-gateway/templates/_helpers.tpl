@@ -116,6 +116,18 @@ volumes, and the agent template ConfigMap. Renders "true" or nothing.
 {{- end }}
 
 {{/*
+Caller authentication mode: nvcf, callerKeys or anonymous. Fails on anything
+else, so a typo cannot fall through to a mode nobody selected.
+*/}}
+{{- define "llm-api-gateway.authMode" -}}
+{{- $mode := dig "auth" "mode" "nvcf" .Values.llmApiGateway | toString -}}
+{{- if not (has $mode (list "nvcf" "callerKeys" "anonymous")) -}}
+{{- fail (printf "llmApiGateway.auth.mode must be nvcf, callerKeys or anonymous, got %q" $mode) -}}
+{{- end -}}
+{{- $mode -}}
+{{- end }}
+
+{{/*
 Vault audience
 */}}
 {{- define "llm-api-gateway.vaultAudience" -}}

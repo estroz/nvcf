@@ -42,8 +42,8 @@ stack_values="${chart_dir}/values.yaml"
 credentials_secret="$(yq -r '."llm-request-router".llmRequestRouter.auth.credentialsSecret.name' "${stack_values}")"
 credentials_key="$(yq -r '."llm-request-router".llmRequestRouter.auth.credentialsSecret.key' "${stack_values}")"
 router_tls_secret="$(yq -r '."llm-request-router".llmRequestRouter.tls.secretName' "${stack_values}")"
-api_keys_secret="$(yq -r '."llm-api-gateway".llmApiGateway.callerKeys.secretName' "${stack_values}")"
-api_keys_key="$(yq -r '."llm-api-gateway".llmApiGateway.callerKeys.secretKey' "${stack_values}")"
+api_keys_secret="$(yq -r '."llm-api-gateway".llmApiGateway.auth.callerKeys.secretName' "${stack_values}")"
+api_keys_key="$(yq -r '."llm-api-gateway".llmApiGateway.auth.callerKeys.secretKey' "${stack_values}")"
 gateway_tls_secret="$(yq -r '."llm-api-gateway".llmApiGateway.tls.existingSecret' "${stack_values}")"
 ca_name="$(yq -r '.tls.selfSigned.caName' "${stack_values}")"
 cluster_id="$(yq -r '.clusterId' "${ci_values}")"
@@ -195,7 +195,7 @@ render "${list_manifest}" \
   fail "gateway must read the caller key file"
 [ "$(gateway_config "${manifest}" BARE_MODEL_NAMES_ENABLED)" = "true" ] || fail "gateway must accept bare model names"
 [ "$(gateway_config "${manifest}" PUBLIC_READ_ENDPOINTS)" = "true" ] || fail "gateway must serve discovery reads without a key"
-[ "$(gateway_config "${manifest}" ALLOW_ANONYMOUS)" = "false" ] || fail "gateway must not allow anonymous access"
+! gateway_config_has "${manifest}" ALLOW_ANONYMOUS || fail "gateway must not allow anonymous access"
 [ "$(gateway_config "${manifest}" RATE_LIMIT_ENABLED)" = "false" ] || fail "gateway must not rate limit"
 ! gateway_config_has "${manifest}" OLRIC_ENABLED || fail "gateway must not run Olric"
 [ "$(count "${manifest}" Role "${gateway}-olric")" = "0" ] || fail "stack must not render the Olric Role"
@@ -329,9 +329,7 @@ assert_render_fails "clusterCredential.create needs the router in static credent
   --set llm-request-router.llmRequestRouter.auth.workerAuthEndpoint=http://api.nvcf.svc.cluster.local:9090 \
   --set-string llm-request-router.llmRequestRouter.auth.credentialsSecret.name=
 assert_render_fails "apiKeysSecret.create needs gateway caller keys" \
-  --set llm-api-gateway.llmApiGateway.callerKeys.enabled=false
-assert_render_fails "caller keys and NVCF auth are mutually exclusive" \
-  --set llm-api-gateway.llmApiGateway.config.nvcfGrpcAddr=api.nvcf.svc.cluster.local:9090
+  --set llm-api-gateway.llmApiGateway.auth.mode=nvcf
 assert_render_fails "llm-api-gateway.llmApiGateway.namespace must be empty or the release namespace" \
   --set llm-api-gateway.llmApiGateway.namespace=elsewhere
 

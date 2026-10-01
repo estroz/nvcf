@@ -66,6 +66,7 @@ Important settings to review before deployment:
 - `llmApiGateway.imagePullSecrets` for private registry access
 - `llmApiGateway.replicaCount`, resource requests, and limits for your environment
 - `llmApiGateway.config.requestRouterUrl` and timeout values for the LLM Request Router HTTP endpoint
+- `llmApiGateway.auth.mode` for how callers authenticate: `nvcf` (default) with `llmApiGateway.config.nvcfGrpc*`, `callerKeys` with the key file Secret in `llmApiGateway.auth.callerKeys.*`, or `anonymous`
 - `llmApiGateway.config.nvcfGrpc*` for optional NVCF gRPC auth integration
 - `llmApiGateway.metrics.enabled` to expose a metrics port on the Service and Deployment (default: `false`)
 - `llmApiGateway.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)

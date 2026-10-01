@@ -66,9 +66,8 @@ llmApiGateway:
     requestRouterUrl: "http://llm-request-router.nvcf.svc.cluster.local:8000"
     requestRouterConnectTimeout: 2s
     requestRouterRequestTimeout: 0s
-    # How long GET /v1/models and GET /v1/registry reuse one router model
-    # listing response.
-    # 0s calls the router on every request.
+    # How long GET /v1/models, /v1/models/{id} and /v1/registry reuse one router
+    # listing response. 0s calls the router on every request.
     requestRouterListingCacheTtl: 3s
     # Longest a single response write may stall on a client that stopped
     # reading. Applies only while a write is in progress, so it does not cap
@@ -83,7 +82,7 @@ llmApiGateway:
     # prefix and no NVCF auth. For deployments without the NVCF control plane.
     # Do not enable where untrusted callers can reach the gateway.
     bareModelNamesEnabled: false
-    # With auth.mode callerKeys, serve GET /v1/models, /v1/models/{id} and
+    # In staticKeys mode, serve GET /v1/models, /v1/models/{id} and
     # /v1/registry without a key. Inference still needs one. Logged as a
     # warning at startup.
     publicReadEndpoints: false
@@ -91,6 +90,34 @@ llmApiGateway:
     defaultModel: ""
     defaultRpm: 120
     defaultTpm: 240000
+
+  # Caller authentication. mode selects exactly one of:
+  #   nvcf        Authenticate each request through the NVCF LLM gRPC auth
+  #               service at config.nvcfGrpcAddr, with the service token the
+  #               Vault Agent writes to /vault/secrets/secrets.json. The model
+  #               carries a routing-key prefix. This is the default.
+  #   staticKeys  Verify the caller's bearer key against the SHA-256 digests in
+  #               the Secret staticKeys.existingSecret. Needs no NVCF API and no
+  #               Vault; set vault.enabled=false when no Vault is available.
+  #   anonymous   Accept every request without credentials. Development only.
+  auth:
+    mode: nvcf
+    staticKeys:
+      # Existing Secret with key api-keys.json, mounted read-only at
+      # /etc/llm-api-gateway/auth and passed as API_KEYS_PATH. Required in
+      # staticKeys mode. The gateway re-reads the file every 30 seconds, so
+      # key changes need no restart. Format:
+      #   {"keys": [{"id": "team-a", "sha256": "<lowercase hex SHA-256 of the key>"}]}
+      existingSecret: ""
+
+  # TLS on the gateway listener. When enabled, the kubernetes.io/tls Secret
+  # existingSecret is mounted read-only at /etc/llm-api-gateway/tls, its tls.crt
+  # and tls.key are passed as TLS_CERT_FILE and TLS_KEY_FILE, and the probes use
+  # HTTPS. The gateway re-reads the files every 30 seconds, so a renewed
+  # certificate needs no restart.
+  tls:
+    enabled: false
+    existingSecret: ""
 
   # Rate-limit state is kept in an embedded Olric cluster colocated with the
   # gateway pods (no separate Redis deployment). The gateway's server.go picks
@@ -120,34 +147,11 @@ llmApiGateway:
       create: true
 
   vault:
-    # false drops the Vault Agent annotations, the vault-token and
-    # vault-config-templates volumes and the agent template ConfigMap, for
-    # deployments without Vault. noVaultAnnotations drops only the annotations.
+    # Inject the Vault Agent sidecar and mount its token and template volumes.
+    # nvcf mode reads its NVCF service token from the Vault Agent. staticKeys
+    # and anonymous modes need no Vault; set false when none is available.
     enabled: true
     audience: ""
-
-  auth:
-    # How the gateway authenticates callers:
-    #   nvcf        NVCF auth at config.nvcfGrpcAddr.
-    #   callerKeys  Static API keys from auth.callerKeys, for deployments
-    #               without the NVCF control plane.
-    #   anonymous   No caller authentication: every caller is admitted.
-    mode: nvcf
-    callerKeys:
-      # Existing Secret holding the caller key file, which lists hashes only:
-      #   keys:
-      #     - id: demo-ui
-      #       sha256: <64 hex SHA-256 of the key>
-      secretName: ""
-      # Key in the Secret that holds the file.
-      secretKey: caller-keys.yaml
-
-  # Serve the listener over TLS. The kubernetes.io/tls Secret existingSecret is
-  # mounted at /etc/llm-api-gateway/tls and the probes use HTTPS. The gateway
-  # re-reads the pair every 30 s, so a renewed certificate needs no restart.
-  tls:
-    enabled: false
-    existingSecret: ""
 
   metrics:
     enabled: false

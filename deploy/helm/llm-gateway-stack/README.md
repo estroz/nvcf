@@ -12,8 +12,8 @@ The chart installs:
 - the `llm-request-router` chart (alias `llm-request-router`) in static
   credentials mode: it verifies the cluster token that Pylon transport pods
   present against SHA-256 hashes in its worker auth file, with no Vault Agent
-- the `llm-api-gateway` chart (alias `llm-api-gateway`) with caller keys and
-  bare model names: it verifies caller API keys against SHA-256 digests,
+- the `llm-api-gateway` chart (alias `llm-api-gateway`) in `staticKeys` mode
+  with bare model names: it verifies caller API keys against SHA-256 digests,
   serves the model list and registry without a key, serves HTTPS, and runs
   without the NVCF API or Vault
 - Secret `llm-gateway-stack-worker-credentials`, key `credentials.yaml`, the
@@ -25,14 +25,8 @@ The chart installs:
     - sha256:<64 hex>
   ```
 
-- Secret `llm-gateway-stack-api-keys`, key `caller-keys.yaml`, the gateway's
-  caller key file:
-
-  ```yaml
-  keys:
-  - id: <id>
-    sha256: <64 hex>
-  ```
+- Secret `llm-gateway-stack-api-keys`, the gateway's key file
+  `{"keys": [{"id": "<id>", "sha256": "<sha256>"}]}`
 
 - with `tls.selfSigned.enabled` (default), a CA and two certificates it signs:
   Secret `llm-gateway-stack-ca` (the CA, kept on uninstall), ConfigMap
@@ -197,9 +191,8 @@ reads the names of the Secrets it renders, so change them there.
 | `llm-api-gateway.llmApiGateway.config.publicReadEndpoints` | `true` |
 | `llm-api-gateway.llmApiGateway.config.rateLimitEnabled` | `false` |
 | `llm-api-gateway.llmApiGateway.olric.enabled` | `false` |
-| `llm-api-gateway.llmApiGateway.auth.mode` | `callerKeys` |
-| `llm-api-gateway.llmApiGateway.auth.callerKeys.secretName` | `llm-gateway-stack-api-keys` |
-| `llm-api-gateway.llmApiGateway.auth.callerKeys.secretKey` | `caller-keys.yaml` |
+| `llm-api-gateway.llmApiGateway.auth.mode` | `staticKeys` |
+| `llm-api-gateway.llmApiGateway.auth.staticKeys.existingSecret` | `llm-gateway-stack-api-keys` |
 | `llm-api-gateway.llmApiGateway.vault.enabled` | `false` |
 | `llm-api-gateway.llmApiGateway.tls.enabled` | `true` |
 | `llm-api-gateway.llmApiGateway.tls.existingSecret` | `llm-gateway-stack-gateway-tls` |

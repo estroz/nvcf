@@ -48,10 +48,10 @@ clusterCredential:
 apiKeys: []
 
 apiKeysSecret:
-  # Render the gateway's caller key file Secret from apiKeys, named by
-  # llm-api-gateway.llmApiGateway.auth.callerKeys.secretName, key
-  # auth.callerKeys.secretKey. Set false to create that Secret yourself. The
-  # gateway re-reads the file every 30 seconds.
+  # Render the gateway's key file Secret from apiKeys, named by
+  # llm-api-gateway.llmApiGateway.auth.staticKeys.existingSecret, key
+  # api-keys.json. Set false to create that Secret yourself. The gateway
+  # re-reads the file every 30 seconds.
   create: true
 
 tls:
@@ -144,12 +144,10 @@ llm-api-gateway:
       rateLimitEnabled: false
     olric:
       enabled: false
-    # Callers authenticate with the keys in apiKeys.
     auth:
-      mode: callerKeys
-      callerKeys:
-        secretName: llm-gateway-stack-api-keys
-        secretKey: caller-keys.yaml
+      mode: staticKeys
+      staticKeys:
+        existingSecret: llm-gateway-stack-api-keys
     vault:
       enabled: false
     tls:

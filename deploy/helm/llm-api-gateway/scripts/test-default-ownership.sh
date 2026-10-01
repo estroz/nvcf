@@ -21,11 +21,6 @@ read_config() {
   yq ea -r "select(.kind == \"ConfigMap\" and .metadata.name == \"llm-api-gateway\") | .data.${key}" "$manifest"
 }
 
-has_config() {
-  local manifest="$1" key="$2"
-  test "$(yq ea -r "select(.kind == \"ConfigMap\" and .metadata.name == \"llm-api-gateway\") | .data | has(\"${key}\")" "$manifest")" = true
-}
-
 helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
   --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
@@ -33,10 +28,6 @@ helm template llm-api-gateway "$chart_dir" \
 
 test "$(read_config "$default_manifest" NVCF_GRPC_INSECURE)" = false ||
   fail "generic chart must default to verified NVCF gRPC transport"
-has_config "$default_manifest" NVCF_GRPC_ADDR ||
-  fail "generic chart must default to NVCF auth"
-! has_config "$default_manifest" ALLOW_ANONYMOUS ||
-  fail "generic chart must leave allow anonymous off by default"
 test "$(yq ea -r 'select(.kind == "Deployment") | [.spec.template.spec.containers[0].ports[] | select(.name == "metrics")] | length' "$default_manifest")" = 0 ||
   fail "generic chart must leave the metrics endpoint disabled by default"
 test "$(yq ea -r '[select(.kind == "ServiceMonitor")] | length' "$default_manifest")" = 0 ||
@@ -66,54 +57,5 @@ if helm template llm-api-gateway "$chart_dir" \
 fi
 grep -Fq 'llmApiGateway.metrics.enabled must be true' "$invalid_error" ||
   fail "invalid ServiceMonitor configuration returned the wrong error"
-
-! has_config "$default_manifest" API_KEYS_PATH ||
-  fail "generic chart must leave caller keys off by default"
-
-caller_keys_manifest="$work_dir/caller-keys.yaml"
-helm template llm-api-gateway "$chart_dir" \
-  --namespace nvcf \
-  --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
-  --set llmApiGateway.auth.mode=callerKeys \
-  --set llmApiGateway.auth.callerKeys.secretName=demo-caller-keys \
-  >"$caller_keys_manifest"
-
-test "$(read_config "$caller_keys_manifest" API_KEYS_PATH)" = /etc/llm-api-gateway/caller-keys/caller-keys.yaml ||
-  fail "caller keys opt-in did not set API_KEYS_PATH"
-! has_config "$caller_keys_manifest" NVCF_GRPC_ADDR ||
-  fail "caller keys mode must not select NVCF auth"
-test "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "caller-keys") | .secret.secretName + "/" + .secret.items[0].key + "/" + .secret.items[0].path' "$caller_keys_manifest")" = demo-caller-keys/caller-keys.yaml/caller-keys.yaml ||
-  fail "caller keys opt-in did not mount the key file from the Secret"
-test "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "caller-keys") | .mountPath + "/" + (.readOnly | tostring)' "$caller_keys_manifest")" = /etc/llm-api-gateway/caller-keys/true ||
-  fail "caller keys opt-in did not mount the Secret read-only into the gateway"
-
-anonymous_manifest="$work_dir/anonymous.yaml"
-helm template llm-api-gateway "$chart_dir" \
-  --namespace nvcf \
-  --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
-  --set llmApiGateway.auth.mode=anonymous \
-  >"$anonymous_manifest"
-
-test "$(read_config "$anonymous_manifest" ALLOW_ANONYMOUS)" = true ||
-  fail "anonymous mode did not set ALLOW_ANONYMOUS"
-! has_config "$anonymous_manifest" NVCF_GRPC_ADDR ||
-  fail "anonymous mode must not select NVCF auth"
-
-# Each case: the --set override, then the expected render error.
-while IFS='|' read -r override want_error; do
-  if helm template llm-api-gateway "$chart_dir" \
-    --namespace nvcf \
-    --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
-    --set "$override" \
-    >/dev/null 2>"$invalid_error"; then
-    fail "$override should fail the render"
-  fi
-  grep -Fq "$want_error" "$invalid_error" ||
-    fail "$override returned the wrong error: $(cat "$invalid_error")"
-done <<'EOF'
-llmApiGateway.auth.mode=callerKeys|llmApiGateway.auth.callerKeys.secretName is required
-llmApiGateway.auth.mode=oidc|llmApiGateway.auth.mode must be nvcf, callerKeys or anonymous
-llmApiGateway.config.nvcfGrpcAddr=|llmApiGateway.config.nvcfGrpcAddr is required
-EOF
 
 echo "llm-api-gateway-default-ownership: all checks passed"

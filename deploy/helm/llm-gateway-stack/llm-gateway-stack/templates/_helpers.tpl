@@ -183,8 +183,8 @@ Renders nothing.
 {{- end -}}
 
 {{- if .Values.apiKeysSecret.create -}}
-{{- if not (and (eq (dig "auth" "mode" "nvcf" $g) "callerKeys") (dig "auth" "callerKeys" "secretName" "" $g) (dig "auth" "callerKeys" "secretKey" "" $g)) -}}
-{{- fail "llm-gateway-stack: apiKeysSecret.create needs gateway caller keys: set llm-api-gateway.llmApiGateway.auth.mode to callerKeys, and auth.callerKeys.secretName and secretKey" -}}
+{{- if or (ne (dig "auth" "mode" "" $g) "staticKeys") (not (dig "auth" "staticKeys" "existingSecret" "" $g)) -}}
+{{- fail "llm-gateway-stack: apiKeysSecret.create needs the gateway in static key mode: set llm-api-gateway.llmApiGateway.auth.mode to staticKeys and auth.staticKeys.existingSecret" -}}
 {{- end -}}
 {{- $ids := list -}}
 {{- $digests := list -}}

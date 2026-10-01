@@ -597,7 +597,7 @@ When the router rejects a token, `Registered` turns `False` with reason
 `RegistrationRejected`, and the operator emits `RegistrationStreamRejected`
 Warning Events. `run.sh` reads the token from the Secret, so `make deploy` and
 `make test` keep working after a rotation. API keys rotate through `apiKeys`
-in the same way; the gateway re-reads its key file at most every 60 seconds.
+in the same way; the gateway re-reads its key file every 30 seconds.
 
 ## Troubleshooting
 

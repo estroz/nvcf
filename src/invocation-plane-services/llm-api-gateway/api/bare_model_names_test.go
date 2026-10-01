@@ -144,6 +144,52 @@ func TestBareModelNames_RoutedRequest_RouterGetsOnlyGatewayResolvedHeaders(t *te
 	}
 }
 
+// TestNoNVCFAuth_RoutedRequest_RouterGetsNoAuthorization covers ALLOW_ANONYMOUS
+// with prefixed model names: nothing validates the caller's bearer token, so it
+// must not reach the router.
+func TestNoNVCFAuth_RoutedRequest_RouterGetsNoAuthorization(t *testing.T) {
+	t.Parallel()
+
+	for _, endpoint := range bareModelEndpoints {
+		t.Run(endpoint.name, func(t *testing.T) {
+			t.Parallel()
+
+			received := make(chan http.Header, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				received <- r.Header.Clone()
+				w.Header().Set(echo.HeaderContentType, endpoint.upstreamContentType)
+				_, _ = io.WriteString(w, endpoint.upstreamBody)
+			}))
+			t.Cleanup(upstream.Close)
+			stargate, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
+			require.NoError(t, err)
+
+			cfg := config.Default()
+			e := echo.New()
+			e.Use(NewContextMiddleware(cfg))
+			e.Use(NewNVCFAuthMiddleware(nil))
+			RegisterRoutes(e, NewHandlers(cfg, stargate, nil, nil))
+
+			req := httptest.NewRequest(
+				http.MethodPost,
+				endpoint.path,
+				strings.NewReader(fmt.Sprintf(endpoint.body, "fn-alpha/"+bareModelName)),
+			)
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			req.Header.Set(echo.HeaderAuthorization, "Bearer caller-secret")
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			routerHeaders := <-received
+			require.Equal(t, []string{"fn-alpha"}, routerHeaders.Values("X-Routing-Key"))
+			require.Empty(t, routerHeaders.Values(echo.HeaderAuthorization))
+		})
+	}
+}
+
 func TestBareModelNames_SettingOff_RejectsModelWithoutRoutingKey(t *testing.T) {
 	t.Parallel()
 

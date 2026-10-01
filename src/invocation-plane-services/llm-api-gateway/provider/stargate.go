@@ -406,12 +406,13 @@ func (p *StargateProvider) Proxy(
 	// An inbound X-Routing-Method request header must never reach the router.
 	outbound.Header.Del(headerRoutingMethod)
 	// Without a routing key (bare model names) the gateway authorized no
-	// routing scope or credential, so caller-supplied ones must not reach the
-	// router either.
+	// routing scope, so a caller-supplied one must not reach the router either.
 	if reqCtx == nil || reqCtx.RoutingKey == "" {
 		outbound.Header.Del(headerRoutingKey)
-		outbound.Header.Del(headerAuthorization)
 	}
+	// Only a bearer token that NVCF auth validated reaches the router; it is
+	// set again below.
+	outbound.Header.Del(headerAuthorization)
 
 	if reqCtx != nil {
 		if reqCtx.RequestID != "" {

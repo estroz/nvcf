@@ -43,8 +43,17 @@ type InvocationAuthClient interface {
 
 func NewNVCFAuthMiddleware(client InvocationAuthClient) echo.MiddlewareFunc {
 	if client == nil {
+		// Without NVCF auth nothing validates the caller's bearer token, so it
+		// must not reach the router.
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
-			return next
+			return func(ec echo.Context) error {
+				if gc, ok := ec.(*GatewayContext); ok {
+					if reqCtx := gc.RequestContext(); reqCtx != nil {
+						reqCtx.BearerToken = ""
+					}
+				}
+				return next(ec)
+			}
 		}
 	}
 

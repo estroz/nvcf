@@ -196,6 +196,9 @@ render "${list_manifest}" \
 [ "$(gateway_config "${manifest}" BARE_MODEL_NAMES_ENABLED)" = "true" ] || fail "gateway must accept bare model names"
 [ "$(gateway_config "${manifest}" PUBLIC_READ_ENDPOINTS)" = "true" ] || fail "gateway must serve discovery reads without a key"
 [ "$(gateway_config "${manifest}" ALLOW_ANONYMOUS)" = "false" ] || fail "gateway must not allow anonymous access"
+[ "$(gateway_config "${manifest}" RATE_LIMIT_ENABLED)" = "false" ] || fail "gateway must not rate limit"
+! gateway_config_has "${manifest}" OLRIC_ENABLED || fail "gateway must not run Olric"
+[ "$(count "${manifest}" Role "${gateway}-olric")" = "0" ] || fail "stack must not render the Olric Role"
 [ "$(volume_secret "${manifest}" "${gateway}" caller-keys)" = "${api_keys_secret}" ] ||
   fail "gateway must mount the stack's API key Secret"
 [ "$(count "${manifest}" Secret "${api_keys_secret}")" = "1" ] || fail "stack must render the gateway API key Secret"

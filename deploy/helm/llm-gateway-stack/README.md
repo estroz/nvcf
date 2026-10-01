@@ -196,6 +196,8 @@ reads the names of the Secrets it renders, so change them there.
 | `llm-api-gateway.llmApiGateway.config.nvcfGrpcAddr` | `""` |
 | `llm-api-gateway.llmApiGateway.config.bareModelNamesEnabled` | `true` |
 | `llm-api-gateway.llmApiGateway.config.publicReadEndpoints` | `true` |
+| `llm-api-gateway.llmApiGateway.config.rateLimitEnabled` | `false` |
+| `llm-api-gateway.llmApiGateway.olric.enabled` | `false` |
 | `llm-api-gateway.llmApiGateway.callerKeys.enabled` | `true` |
 | `llm-api-gateway.llmApiGateway.callerKeys.secretName` | `llm-gateway-stack-api-keys` |
 | `llm-api-gateway.llmApiGateway.callerKeys.secretKey` | `caller-keys.yaml` |

@@ -142,6 +142,10 @@ llm-api-gateway:
       # The registry and model list are readable without a key, so the demo UI
       # can browse them. Inference still needs a key.
       publicReadEndpoints: true
+      # No rate limiting, so no Olric node and no RBAC for its peer discovery.
+      rateLimitEnabled: false
+    olric:
+      enabled: false
     callerKeys:
       enabled: true
       secretName: llm-gateway-stack-api-keys

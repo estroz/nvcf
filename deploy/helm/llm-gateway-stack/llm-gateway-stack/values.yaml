@@ -48,10 +48,10 @@ clusterCredential:
 apiKeys: []
 
 apiKeysSecret:
-  # Render the gateway's key file Secret from apiKeys, named by
-  # llm-api-gateway.llmApiGateway.auth.staticKeys.existingSecret, key
-  # api-keys.json. Set false to create that Secret yourself. The gateway
-  # re-reads the file at most every 60 seconds.
+  # Render the gateway's caller key file Secret from apiKeys, named by
+  # llm-api-gateway.llmApiGateway.callerKeys.secretName, key
+  # callerKeys.secretKey. Set false to create that Secret yourself. The gateway
+  # re-reads the file every 30 seconds.
   create: true
 
 tls:
@@ -135,12 +135,19 @@ llm-api-gateway:
     config:
       # The router Service in the same namespace, by its short name.
       requestRouterUrl: http://llm-request-router:8000
-    auth:
-      mode: staticKeys
-      staticKeys:
-        existingSecret: llm-gateway-stack-api-keys
+      # No NVCF control plane: callers authenticate with the caller keys below
+      # and name models without a routing-key prefix.
+      nvcfGrpcAddr: ""
+      bareModelNamesEnabled: true
+      # The registry and model list are readable without a key, so the demo UI
+      # can browse them. Inference still needs a key.
+      publicReadEndpoints: true
+    callerKeys:
+      enabled: true
+      secretName: llm-gateway-stack-api-keys
+      secretKey: caller-keys.yaml
     vault:
-      enabled: false
+      noVaultAnnotations: true
     tls:
       enabled: true
       existingSecret: llm-gateway-stack-gateway-tls

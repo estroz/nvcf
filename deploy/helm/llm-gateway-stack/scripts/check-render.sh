@@ -42,7 +42,8 @@ stack_values="${chart_dir}/values.yaml"
 credentials_secret="$(yq -r '."llm-request-router".llmRequestRouter.auth.credentialsSecret.name' "${stack_values}")"
 credentials_key="$(yq -r '."llm-request-router".llmRequestRouter.auth.credentialsSecret.key' "${stack_values}")"
 router_tls_secret="$(yq -r '."llm-request-router".llmRequestRouter.tls.secretName' "${stack_values}")"
-api_keys_secret="$(yq -r '."llm-api-gateway".llmApiGateway.auth.staticKeys.existingSecret' "${stack_values}")"
+api_keys_secret="$(yq -r '."llm-api-gateway".llmApiGateway.callerKeys.secretName' "${stack_values}")"
+api_keys_key="$(yq -r '."llm-api-gateway".llmApiGateway.callerKeys.secretKey' "${stack_values}")"
 gateway_tls_secret="$(yq -r '."llm-api-gateway".llmApiGateway.tls.existingSecret' "${stack_values}")"
 ca_name="$(yq -r '.tls.selfSigned.caName' "${stack_values}")"
 cluster_id="$(yq -r '.clusterId' "${ci_values}")"
@@ -187,18 +188,20 @@ render "${list_manifest}" \
 [ "$(worker_auth_hashes "${list_manifest}" | tr '\n' ' ')" = "sha256:${next_sha256} sha256:${cluster_sha256} " ] ||
   fail "clusterCredential.sha256Hashes alone must render every hash in order, with the sha256: prefix"
 
-# Gateway: static API keys from the stack's Secret, no NVCF API, TLS listener.
-! gateway_config_has "${manifest}" NVCF_GRPC_ADDR || fail "gateway must not select NVCF auth"
-! gateway_config_has "${manifest}" SECRETS_PATH || fail "gateway must not read Vault secrets"
-[ "$(env_value "${manifest}" "${gateway}" API_KEYS_PATH)" = "/etc/llm-api-gateway/auth/api-keys.json" ] ||
-  fail "gateway must read the static API key file"
-! has_env "${manifest}" "${gateway}" ALLOW_ANONYMOUS || fail "gateway must not allow anonymous access"
-[ "$(volume_secret "${manifest}" "${gateway}" api-keys)" = "${api_keys_secret}" ] ||
+# Gateway: caller keys from the stack's Secret, bare model names, public
+# discovery reads, no NVCF API, TLS listener.
+[ -z "$(gateway_config "${manifest}" NVCF_GRPC_ADDR)" ] || fail "gateway must not select NVCF auth"
+[ "$(gateway_config "${manifest}" CALLER_KEYS_FILE)" = "/etc/llm-api-gateway/caller-keys/caller-keys.yaml" ] ||
+  fail "gateway must read the caller key file"
+[ "$(gateway_config "${manifest}" BARE_MODEL_NAMES_ENABLED)" = "true" ] || fail "gateway must accept bare model names"
+[ "$(gateway_config "${manifest}" PUBLIC_READ_ENDPOINTS)" = "true" ] || fail "gateway must serve discovery reads without a key"
+[ "$(gateway_config "${manifest}" ALLOW_ANONYMOUS)" = "false" ] || fail "gateway must not allow anonymous access"
+[ "$(volume_secret "${manifest}" "${gateway}" caller-keys)" = "${api_keys_secret}" ] ||
   fail "gateway must mount the stack's API key Secret"
 [ "$(count "${manifest}" Secret "${api_keys_secret}")" = "1" ] || fail "stack must render the gateway API key Secret"
-[ "$(secret_value "${manifest}" "${api_keys_secret}" api-keys.json | jq -c .)" = "$(printf '%s' "${api_keys_json}" | jq -c .)" ] ||
+[ "$(secret_value "${manifest}" "${api_keys_secret}" "${api_keys_key}" | yq -o=json -I=0 .)" = "$(printf '%s' "${api_keys_json}" | jq -c .)" ] ||
   fail "gateway key file must hold the apiKeys ids and digests"
-[ "$(env_value "${manifest}" "${gateway}" TLS_CERT_FILE)" = "/etc/llm-api-gateway/tls/tls.crt" ] || fail "gateway must serve TLS"
+[ "$(gateway_config "${manifest}" TLS_CERT_FILE)" = "/etc/llm-api-gateway/tls/tls.crt" ] || fail "gateway must serve TLS"
 [ "$(volume_secret "${manifest}" "${gateway}" tls)" = "${gateway_tls_secret}" ] ||
   fail "gateway must mount the stack's gateway TLS Secret"
 [ "$(deployment "${manifest}" "${gateway}" '.spec.template.spec.containers[0].readinessProbe.httpGet.scheme')" = "HTTPS" ] ||
@@ -208,11 +211,10 @@ router_http_port="$(yq -r "select(.kind == \"Service\" and .metadata.name == \"$
 [ "$(gateway_config "${manifest}" STARGATE_URL)" = "http://${router}:${router_http_port}" ] ||
   fail "gateway must reach the router Service in its namespace"
 
-# No Vault anywhere.
+# No Vault Agent. The gateway chart still renders an unused SECRETS_PATH and
+# token volume; neither needs Vault to start.
 [ "$(vault_annotations "${manifest}" "${router}")" = "0" ] || fail "router must not carry Vault Agent annotations"
 [ "$(vault_annotations "${manifest}" "${gateway}")" = "0" ] || fail "gateway must not carry Vault Agent annotations"
-[ -z "$(deployment "${manifest}" "${gateway}" '(.spec.template.spec.volumes // []) | .[] | select(.name == "vault-token") | .name')" ] ||
-  fail "gateway must not mount the Vault token"
 
 # Self-signed TLS: CA, CA ConfigMap and two server Secrets.
 for secret in "${ca_name}" "${router_tls_secret}" "${gateway_tls_secret}"; do
@@ -319,8 +321,10 @@ assert_render_fails "apiKeys id \"dup\" is listed twice" \
 assert_render_fails "clusterCredential.create needs the router in static credentials mode" \
   --set llm-request-router.llmRequestRouter.auth.workerAuthEndpoint=http://api.nvcf.svc.cluster.local:9090 \
   --set-string llm-request-router.llmRequestRouter.auth.credentialsSecret.name=
-assert_render_fails "apiKeysSecret.create needs the gateway in static key mode" \
-  --set llm-api-gateway.llmApiGateway.auth.mode=anonymous
+assert_render_fails "apiKeysSecret.create needs gateway caller keys" \
+  --set llm-api-gateway.llmApiGateway.callerKeys.enabled=false
+assert_render_fails "caller keys and NVCF auth are mutually exclusive" \
+  --set llm-api-gateway.llmApiGateway.config.nvcfGrpcAddr=api.nvcf.svc.cluster.local:9090
 assert_render_fails "llm-api-gateway.llmApiGateway.namespace must be empty or the release namespace" \
   --set llm-api-gateway.llmApiGateway.namespace=elsewhere
 

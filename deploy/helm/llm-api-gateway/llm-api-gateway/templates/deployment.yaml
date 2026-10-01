@@ -1,4 +1,3 @@
-{{- include "llm-api-gateway.validateAuthTls" . -}}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -38,9 +37,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        {{- with include "llm-api-gateway.podAnnotations" . }}
-        {{- . | nindent 8 }}
-        {{- end }}
+        {{- include "llm-api-gateway.podAnnotations" . | nindent 8 }}
         checksum/config-env: {{ include "llm-api-gateway.configChecksum" . }}
     spec:
       serviceAccountName: {{ include "llm-api-gateway.serviceAccountName" . }}
@@ -76,9 +73,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "llm-api-gateway.fullname" . }}
-          {{- with include "llm-api-gateway.env" . | trim }}
+          {{- if .Values.llmApiGateway.olric.enabled }}
           env:
-            {{- . | nindent 12 }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           {{- end }}
           ports:
             - name: http
@@ -101,9 +101,6 @@ spec:
             httpGet:
               path: /healthz
               port: http
-              {{- with include "llm-api-gateway.probeScheme" . }}
-              {{- . | nindent 14 }}
-              {{- end }}
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 12
@@ -111,29 +108,50 @@ spec:
             httpGet:
               path: /readyz
               port: http
-              {{- with include "llm-api-gateway.probeScheme" . }}
-              {{- . | nindent 14 }}
-              {{- end }}
             periodSeconds: 5
             timeoutSeconds: 2
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
-              {{- with include "llm-api-gateway.probeScheme" . }}
-              {{- . | nindent 14 }}
-              {{- end }}
             periodSeconds: 10
             timeoutSeconds: 2
           resources:
             {{- toYaml .Values.llmApiGateway.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.llmApiGateway.securityContext | nindent 12 }}
-          {{- with include "llm-api-gateway.volumeMounts" . | trim }}
           volumeMounts:
-            {{- . | nindent 12 }}
-          {{- end }}
-      {{- with include "llm-api-gateway.volumes" . | trim }}
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+            {{- if .Values.llmApiGateway.callerKeys.enabled }}
+            # A directory mount, not subPath: kubelet updates it when the
+            # Secret changes, and the gateway re-reads the file every 30 s.
+            - name: caller-keys
+              mountPath: /etc/llm-api-gateway/caller-keys
+              readOnly: true
+            {{- end }}
       volumes:
-        {{- . | nindent 8 }}
-      {{- end }}
+        - name: vault-token
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: token
+                expirationSeconds: 3600
+                audience: {{ include "llm-api-gateway.vaultAudience" . }}
+        - name: vault-config-templates
+          configMap:
+            name: {{ include "llm-api-gateway.fullname" . }}-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+        {{- with .Values.llmApiGateway.callerKeys }}
+        {{- if .enabled }}
+        - name: caller-keys
+          secret:
+            secretName: {{ required "llmApiGateway.callerKeys.secretName is required when callerKeys.enabled is true" .secretName | quote }}
+            items:
+              - key: {{ .secretKey | quote }}
+                path: caller-keys.yaml
+        {{- end }}
+        {{- end }}

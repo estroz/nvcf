@@ -16,31 +16,28 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
-    name = "statickeys",
-    srcs = ["statickeys.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys",
+    name = "callerkeys",
+    srcs = ["callerkeys.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys",
     visibility = ["//visibility:public"],
     deps = [
-        "//src/invocation-plane-services/llm-api-gateway/nvcf",
         "//src/invocation-plane-services/llm-api-gateway/telemetry",
-        "@org_golang_google_grpc//codes",
-        "@org_golang_google_grpc//status",
+        "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )
 
 alias(
     name = "go_default_library",
-    actual = ":statickeys",
+    actual = ":callerkeys",
     visibility = ["//visibility:public"],
 )
 
 go_test(
-    name = "statickeys_test",
-    srcs = ["statickeys_test.go"],
-    embed = [":statickeys"],
+    name = "callerkeys_test",
+    srcs = ["callerkeys_test.go"],
+    embed = [":callerkeys"],
     deps = [
         "@com_github_rs_zerolog//:zerolog",
-        "@org_golang_google_grpc//codes",
-        "@org_golang_google_grpc//status",
+        "@com_github_stretchr_testify//require",
     ],
 )

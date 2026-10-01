@@ -20,18 +20,15 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	echo "github.com/labstack/echo/v4"
-	"github.com/rs/zerolog"
 	zlog "github.com/rs/zerolog/log"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
@@ -39,7 +36,10 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-const defaultGatewayShutdownTimeout = 5 * time.Second
+const (
+	defaultGatewayShutdownTimeout = 5 * time.Second
+	callerKeysRefreshInterval     = 30 * time.Second
+)
 
 func main() {
 	cfg, err := config.LoadFromEnv()
@@ -47,6 +47,12 @@ func main() {
 		zlog.Fatal().Err(err).Msg("failed to load configuration")
 	}
 	telemetry.SetServiceName(cfg.Telemetry.ServiceName)
+	if err := cfg.CheckCallerAuth(); err != nil {
+		zlog.Fatal().Err(err).Msg("refusing to start without caller authentication")
+	}
+	if cfg.AllowAnonymous {
+		zlog.Warn().Msg("ALLOW_ANONYMOUS is set: callers are not authenticated")
+	}
 
 	observability, err := telemetry.Init(context.Background(), telemetry.RuntimeConfig{
 		MetricsPort:        cfg.Telemetry.MetricsPort,
@@ -66,49 +72,8 @@ func main() {
 		zlog.Fatal().Err(err).Msg("failed to initialize inference provider")
 	}
 
-	authClient, authMode, err := newAuthClient(cfg, zlog.Logger)
-	if err != nil {
-		zlog.Fatal().Err(err).Msg("failed to initialize request authentication")
-	}
-
-	e, err := server.New(cfg, inferenceProvider, authClient)
-	if err != nil {
-		zlog.Fatal().Err(err).Msg("failed to initialize gateway")
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	zlog.Info().
-		Str("addr", cfg.Server.Addr).
-		Str("auth_mode", string(authMode)).
-		Bool("public_read_endpoints", cfg.PublicReadEndpointsEnabled()).
-		Bool("tls", cfg.Server.TLSEnabled()).
-		Msg("starting llm api gateway")
-
-	if err := runGateway(
-		ctx,
-		cfg.Server.Addr,
-		shutdownTimeout(cfg.Server.WriteTimeout),
-		gatewayStart(echoStarter{e: e}, cfg.Server),
-		e.Shutdown,
-	); err != nil {
-		zlog.Fatal().Err(err).Msg("gateway exited unexpectedly")
-	}
-}
-
-// newAuthClient builds the caller authenticator for the configured mode. It
-// fails closed: without NVCF_GRPC_ADDR or API_KEYS_PATH the gateway starts
-// only when ALLOW_ANONYMOUS is set, and then with a warning. A nil client
-// means anonymous access.
-func newAuthClient(cfg *config.Config, logger zerolog.Logger) (nvcf.Client, config.AuthMode, error) {
-	mode, err := cfg.AuthMode()
-	if err != nil {
-		return nil, "", err
-	}
-
-	switch mode {
-	case config.AuthModeNVCF:
+	var authClient nvcf.Client
+	if cfg.NVCF.GRPCAddr != "" {
 		grpcAuthClient, err := nvcf.NewClient(nvcf.Config{
 			Addr:               cfg.NVCF.GRPCAddr,
 			SecretsPath:        cfg.NVCF.SecretsPath,
@@ -117,54 +82,41 @@ func newAuthClient(cfg *config.Config, logger zerolog.Logger) (nvcf.Client, conf
 			Timeout:            cfg.NVCF.GRPCTimeout,
 		})
 		if err != nil {
-			return nil, "", fmt.Errorf("initialize nvcf grpc auth client: %w", err)
+			zlog.Fatal().Err(err).Msg("failed to initialize nvcf grpc auth client")
 		}
-		return nvcf.NewCachedClient(grpcAuthClient), mode, nil
-	case config.AuthModeStaticKeys:
-		authorizer, err := statickeys.New(cfg.Auth.APIKeysPath)
+		authClient = nvcf.NewCachedClient(grpcAuthClient)
+	}
+
+	var callerKeys *callerkeys.KeySet
+	var callerKeyStore callerkeys.Store
+	if cfg.CallerKeysFile != "" {
+		callerKeyStore = callerkeys.NewFileStore(cfg.CallerKeysFile)
+		callerKeys, err = callerkeys.Load(context.Background(), callerKeyStore)
 		if err != nil {
-			return nil, "", fmt.Errorf("initialize static api key authorizer: %w", err)
+			zlog.Fatal().Err(err).Msg("failed to load caller keys")
 		}
-		return authorizer, mode, nil
-	case config.AuthModeAnonymous:
-		logger.Warn().
-			Str("auth_mode", string(mode)).
-			Msg("ALLOW_ANONYMOUS is set and no authenticator is configured: " +
-				"the gateway accepts unauthenticated requests")
-		return nil, mode, nil
-	default:
-		return nil, "", fmt.Errorf("unsupported auth mode %q", mode)
 	}
-}
 
-// gatewayStarter starts the listener, in plaintext or over TLS.
-type gatewayStarter interface {
-	Start(address string) error
-	StartTLS(address, certFile, keyFile string, reloadInterval time.Duration) error
-}
-
-// echoStarter starts the gateway through server.Start and server.StartTLS.
-// e.Start and e.StartTLS would drop the handler server.New installs.
-type echoStarter struct {
-	e *echo.Echo
-}
-
-func (s echoStarter) Start(address string) error {
-	return server.Start(s.e, address)
-}
-
-func (s echoStarter) StartTLS(address, certFile, keyFile string, reloadInterval time.Duration) error {
-	return server.StartTLS(s.e, address, certFile, keyFile, reloadInterval)
-}
-
-// gatewayStart picks the listener for runGateway. Any TLS file selects TLS,
-// so a half-configured pair fails at startup instead of serving plaintext.
-func gatewayStart(s gatewayStarter, serverCfg config.ServerConfig) func(string) error {
-	if !serverCfg.TLSEnabled() {
-		return s.Start
+	e, err := server.New(cfg, inferenceProvider, authClient, callerKeys)
+	if err != nil {
+		zlog.Fatal().Err(err).Msg("failed to initialize gateway")
 	}
-	return func(addr string) error {
-		return s.StartTLS(addr, serverCfg.TLSCertFile, serverCfg.TLSKeyFile, serverCfg.TLSReloadInterval)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if callerKeys != nil {
+		go callerKeys.Refresh(ctx, callerKeyStore, callerKeysRefreshInterval)
+	}
+
+	if err := runGateway(
+		ctx,
+		cfg.Server.Addr,
+		shutdownTimeout(cfg.Server.WriteTimeout),
+		func(addr string) error { return server.Start(e, addr) },
+		e.Shutdown,
+	); err != nil {
+		zlog.Fatal().Err(err).Msg("gateway exited unexpectedly")
 	}
 }
 

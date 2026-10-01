@@ -22,7 +22,7 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
@@ -49,7 +49,7 @@ var discoveryReadRoutes = map[string]struct{}{
 // NewCallerKeyAuthMiddleware authenticates callers against static API keys in
 // place of NVCF auth. A nil key set disables it. With publicDiscoveryReads,
 // GET on the model and registry routes needs no key.
-func NewCallerKeyAuthMiddleware(keys *callerkeys.KeySet, publicDiscoveryReads bool) echo.MiddlewareFunc {
+func NewCallerKeyAuthMiddleware(keys *statickeys.KeySet, publicDiscoveryReads bool) echo.MiddlewareFunc {
 	if keys == nil {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next

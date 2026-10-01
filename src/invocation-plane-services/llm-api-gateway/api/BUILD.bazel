@@ -49,7 +49,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/api/adapters/openairesponses",
-        "//src/invocation-plane-services/llm-api-gateway/callerkeys",
+        "//src/invocation-plane-services/llm-api-gateway/auth/statickeys",
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/internal/must",
         "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
@@ -116,7 +116,7 @@ go_test(
     embed = [":api"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/api/adapters/openairesponses",
-        "//src/invocation-plane-services/llm-api-gateway/callerkeys",
+        "//src/invocation-plane-services/llm-api-gateway/auth/statickeys",
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
         "//src/invocation-plane-services/llm-api-gateway/models",

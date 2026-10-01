@@ -35,7 +35,7 @@ import (
 	zlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
@@ -118,7 +118,7 @@ func newCallerKeyAPI(t *testing.T, bareModelNamesEnabled, publicDiscoveryReads b
 		[]byte("keys:\n  - id: demo-ui\n    sha256: "+listedCallerKeyHash+"\n"),
 		0o600,
 	))
-	keys, err := callerkeys.Load(context.Background(), callerkeys.NewFileStore(keyFile))
+	keys, err := statickeys.Load(context.Background(), statickeys.NewFileStore(keyFile))
 	require.NoError(t, err)
 
 	stargate, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})

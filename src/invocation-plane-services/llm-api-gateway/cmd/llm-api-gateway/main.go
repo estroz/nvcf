@@ -29,7 +29,7 @@ import (
 	echo "github.com/labstack/echo/v4"
 	zlog "github.com/rs/zerolog/log"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
@@ -91,11 +91,11 @@ func main() {
 		authClient = nvcf.NewCachedClient(grpcAuthClient)
 	}
 
-	var callerKeys *callerkeys.KeySet
-	var callerKeyStore callerkeys.Store
+	var callerKeys *statickeys.KeySet
+	var callerKeyStore statickeys.Store
 	if cfg.CallerKeysFile != "" {
-		callerKeyStore = callerkeys.NewFileStore(cfg.CallerKeysFile)
-		callerKeys, err = callerkeys.Load(context.Background(), callerKeyStore)
+		callerKeyStore = statickeys.NewFileStore(cfg.CallerKeysFile)
+		callerKeys, err = statickeys.Load(context.Background(), callerKeyStore)
 		if err != nil {
 			zlog.Fatal().Err(err).Msg("failed to load caller keys")
 		}

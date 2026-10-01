@@ -15,9 +15,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package callerkeys authenticates gateway callers against static API keys
+// Package statickeys authenticates gateway callers against static API keys
 // when the gateway runs without the NVCF control plane.
-package callerkeys
+package statickeys
 
 import (
 	"bytes"

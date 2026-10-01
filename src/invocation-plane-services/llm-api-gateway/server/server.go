@@ -28,7 +28,7 @@ import (
 	echoMiddleware "github.com/labstack/echo/v4/middleware"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/auth/statickeys"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/tlsreload"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
@@ -42,7 +42,7 @@ func New(
 	cfg *config.Config,
 	inferenceProvider provider.InferenceProvider,
 	authClient api.InvocationAuthClient,
-	callerKeys *callerkeys.KeySet,
+	callerKeys *statickeys.KeySet,
 ) (*echo.Echo, error) {
 	if cfg != nil && cfg.Telemetry.ServiceName != "" {
 		telemetry.SetServiceName(cfg.Telemetry.ServiceName)

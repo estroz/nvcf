@@ -191,7 +191,7 @@ render "${list_manifest}" \
 # Gateway: caller keys from the stack's Secret, bare model names, public
 # discovery reads, no NVCF API, TLS listener.
 [ -z "$(gateway_config "${manifest}" NVCF_GRPC_ADDR)" ] || fail "gateway must not select NVCF auth"
-[ "$(gateway_config "${manifest}" CALLER_KEYS_FILE)" = "/etc/llm-api-gateway/caller-keys/caller-keys.yaml" ] ||
+[ "$(gateway_config "${manifest}" API_KEYS_PATH)" = "/etc/llm-api-gateway/caller-keys/caller-keys.yaml" ] ||
   fail "gateway must read the caller key file"
 [ "$(gateway_config "${manifest}" BARE_MODEL_NAMES_ENABLED)" = "true" ] || fail "gateway must accept bare model names"
 [ "$(gateway_config "${manifest}" PUBLIC_READ_ENDPOINTS)" = "true" ] || fail "gateway must serve discovery reads without a key"

@@ -64,9 +64,9 @@ type Config struct {
 
 var (
 	errNoCallerAuth = errors.New(
-		"no caller authentication configured: set NVCF_GRPC_ADDR or CALLER_KEYS_FILE, or ALLOW_ANONYMOUS=true")
+		"no caller authentication configured: set NVCF_GRPC_ADDR or API_KEYS_PATH, or ALLOW_ANONYMOUS=true")
 	errAnonymousWithCallerAuth = errors.New(
-		"ALLOW_ANONYMOUS cannot be combined with NVCF_GRPC_ADDR or CALLER_KEYS_FILE")
+		"ALLOW_ANONYMOUS cannot be combined with NVCF_GRPC_ADDR or API_KEYS_PATH")
 )
 
 type ServerConfig struct {
@@ -313,10 +313,10 @@ func LoadFromEnv() (*Config, error) {
 	if v, ok := errs.boolean("PUBLIC_READ_ENDPOINTS"); ok {
 		cfg.PublicReadEndpoints = v
 	}
-	if path := os.Getenv("CALLER_KEYS_FILE"); path != "" {
+	if path := os.Getenv("API_KEYS_PATH"); path != "" {
 		cfg.CallerKeysFile = path
 		if cfg.NVCF.GRPCAddr != "" {
-			errs.add("CALLER_KEYS_FILE", path, errors.New("CALLER_KEYS_FILE and NVCF_GRPC_ADDR are mutually exclusive"))
+			errs.add("API_KEYS_PATH", path, errors.New("API_KEYS_PATH and NVCF_GRPC_ADDR are mutually exclusive"))
 		}
 	}
 

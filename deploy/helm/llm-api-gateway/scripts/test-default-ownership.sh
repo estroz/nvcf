@@ -67,7 +67,7 @@ fi
 grep -Fq 'llmApiGateway.metrics.enabled must be true' "$invalid_error" ||
   fail "invalid ServiceMonitor configuration returned the wrong error"
 
-! has_config "$default_manifest" CALLER_KEYS_FILE ||
+! has_config "$default_manifest" API_KEYS_PATH ||
   fail "generic chart must leave caller keys off by default"
 
 caller_keys_manifest="$work_dir/caller-keys.yaml"
@@ -78,8 +78,8 @@ helm template llm-api-gateway "$chart_dir" \
   --set llmApiGateway.auth.callerKeys.secretName=demo-caller-keys \
   >"$caller_keys_manifest"
 
-test "$(read_config "$caller_keys_manifest" CALLER_KEYS_FILE)" = /etc/llm-api-gateway/caller-keys/caller-keys.yaml ||
-  fail "caller keys opt-in did not set CALLER_KEYS_FILE"
+test "$(read_config "$caller_keys_manifest" API_KEYS_PATH)" = /etc/llm-api-gateway/caller-keys/caller-keys.yaml ||
+  fail "caller keys opt-in did not set API_KEYS_PATH"
 ! has_config "$caller_keys_manifest" NVCF_GRPC_ADDR ||
   fail "caller keys mode must not select NVCF auth"
 test "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "caller-keys") | .secret.secretName + "/" + .secret.items[0].key + "/" + .secret.items[0].path' "$caller_keys_manifest")" = demo-caller-keys/caller-keys.yaml/caller-keys.yaml ||

@@ -27,7 +27,7 @@ export NVCF_DEFAULT_FUNCTION_ID="${NVCF_DEFAULT_FUNCTION_ID:-default}"
 export NVCF_DEFAULT_MODEL="${NVCF_DEFAULT_MODEL:-bootstrap-echo}"
 # The gateway refuses to start without caller authentication; local runs
 # without NVCF auth or caller keys opt out.
-if [[ -z "${NVCF_GRPC_ADDR:-}" && -z "${CALLER_KEYS_FILE:-}" ]]; then
+if [[ -z "${NVCF_GRPC_ADDR:-}" && -z "${API_KEYS_PATH:-}" ]]; then
   export ALLOW_ANONYMOUS="${ALLOW_ANONYMOUS:-true}"
 fi
 

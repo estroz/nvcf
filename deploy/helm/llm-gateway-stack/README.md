@@ -57,7 +57,7 @@ To run this chart with Pylon Operator on a local k3d cluster, see the
 - The request router and gateway images in a registry the cluster can pull
   from. The chart sets no image registry or repository. The router image must
   support `--worker-auth-file` with the YAML worker auth file, and the gateway image must support
-  `CALLER_KEYS_FILE`, `PUBLIC_READ_ENDPOINTS` and `TLS_CERT_FILE`.
+  `API_KEYS_PATH`, `PUBLIC_READ_ENDPOINTS` and `TLS_CERT_FILE`.
 - The Pylon Operator chart, `deploy/helm/pylon-operator`, installed first: its
   generated cluster token is an input to this chart.
 

@@ -135,7 +135,7 @@ mise run run
 those files exist.
 
 `mise run run` does not start Stargate. By default the gateway targets
-`http://127.0.0.1:8000`. When neither `NVCF_GRPC_ADDR` nor `CALLER_KEYS_FILE`
+`http://127.0.0.1:8000`. When neither `NVCF_GRPC_ADDR` nor `API_KEYS_PATH`
 is set, it sets `ALLOW_ANONYMOUS=true`, so callers are not authenticated.
 
 If `RATE_LIMIT_SYNC_TRANSPORT` is set to `pubsub` or `nats`, run the sync
@@ -174,7 +174,7 @@ Useful overrides:
   It applies only while a write is in progress, so long streams, long
   generations, and upstream pauses are not cut off.
 - `NVCF_GRPC_ADDR` to enable NVCF gRPC auth. The gateway refuses to start
-  without `NVCF_GRPC_ADDR` or `CALLER_KEYS_FILE` unless `ALLOW_ANONYMOUS=true`.
+  without `NVCF_GRPC_ADDR` or `API_KEYS_PATH` unless `ALLOW_ANONYMOUS=true`.
 - `SECRETS_PATH` for the gateway-to-NVCF secrets file. Use `nvcfApiToken` for
   fixed bearer-token auth, or `id` and `secret` with `OAUTH2_PROVIDER_HOST` for
   OAuth2 client-credentials auth.
@@ -189,9 +189,10 @@ Useful overrides:
   plane. Such requests skip NVCF auth, and the caller's `Authorization` and
   `X-Routing-Key` headers are not forwarded. Do not enable it where untrusted
   callers can reach the gateway.
-- `CALLER_KEYS_FILE` to authenticate callers with static API keys instead of
-  NVCF auth (Helm: `auth.mode: callerKeys`). The YAML file lists `keys` entries, each an
-  `id` and the hex SHA-256 of a key; it holds no plain keys. Every route except
+- `API_KEYS_PATH` to authenticate callers with static API keys instead of
+  NVCF auth (Helm: `auth.mode: staticKeys`). The YAML or JSON file lists
+  `keys` entries, each an `id` and the hex SHA-256 of a key; it holds no plain
+  keys. Every route except
   `/healthz`, `/readyz`, and `/info` then needs `Authorization: Bearer <key>`
   and returns 401 without a listed key. The key is not forwarded to the
   router, and logs show `api-key:<id>`. The gateway re-reads the file every
@@ -201,9 +202,9 @@ Useful overrides:
 - `ALLOW_ANONYMOUS=true` to start without caller authentication and admit
   callers without a key (Helm: `auth.mode: anonymous`). The gateway logs a
   warning at startup. It cannot be combined with `NVCF_GRPC_ADDR` or
-  `CALLER_KEYS_FILE`.
+  `API_KEYS_PATH`.
 - `PUBLIC_READ_ENDPOINTS=true` to serve `GET /v1/models`, `GET /v1/models/{id}`,
-  and `GET /v1/registry` without a caller key when `CALLER_KEYS_FILE` is set
+  and `GET /v1/registry` without a caller key when `API_KEYS_PATH` is set
   (Helm: `config.publicReadEndpoints`). Inference routes still need a key. The
   gateway logs a warning at startup.
 - `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve the listener over TLS (Helm:

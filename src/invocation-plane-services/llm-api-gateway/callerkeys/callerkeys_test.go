@@ -78,6 +78,19 @@ func TestLoad_ValidFile_LooksUpKeyIDByPlainKey(t *testing.T) {
 	}
 }
 
+// The Helm chart mounts the key file as api-keys.json.
+func TestLoad_JSONFile_LooksUpKeyID(t *testing.T) {
+	t.Parallel()
+
+	path := writeKeyFile(t, `{"keys": [{"id": "demo-ui", "sha256": "`+demoUIKeyHash+`"}]}`)
+	keys, err := Load(context.Background(), NewFileStore(path))
+	require.NoError(t, err)
+
+	id, ok := keys.Lookup("demo-ui-key")
+	require.True(t, ok)
+	require.Equal(t, "demo-ui", id)
+}
+
 func TestLoad_InvalidFile_FailsToLoad(t *testing.T) {
 	t.Parallel()
 

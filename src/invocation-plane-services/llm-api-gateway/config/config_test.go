@@ -92,7 +92,7 @@ func TestLoadFromEnvReadsBareModelNames(t *testing.T) {
 }
 
 func TestLoadFromEnvReadsCallerKeysFile(t *testing.T) {
-	t.Setenv("CALLER_KEYS_FILE", "/etc/llm-api-gateway/caller-keys/caller-keys.yaml")
+	t.Setenv("API_KEYS_PATH", "/etc/llm-api-gateway/caller-keys/caller-keys.yaml")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -105,14 +105,14 @@ func TestLoadFromEnvReadsCallerKeysFile(t *testing.T) {
 }
 
 func TestLoadFromEnvRejectsCallerKeysWithNVCFAuth(t *testing.T) {
-	t.Setenv("CALLER_KEYS_FILE", "/etc/llm-api-gateway/caller-keys/caller-keys.yaml")
+	t.Setenv("API_KEYS_PATH", "/etc/llm-api-gateway/caller-keys/caller-keys.yaml")
 	t.Setenv("NVCF_GRPC_ADDR", "api.nvcf.svc.cluster.local:9090")
 
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Fatal("LoadFromEnv() error = nil, want an error for caller keys with NVCF auth")
 	}
-	if !strings.Contains(err.Error(), "CALLER_KEYS_FILE and NVCF_GRPC_ADDR are mutually exclusive") {
+	if !strings.Contains(err.Error(), "API_KEYS_PATH and NVCF_GRPC_ADDR are mutually exclusive") {
 		t.Fatalf("LoadFromEnv() error = %v, want it to name both settings", err)
 	}
 }
@@ -126,15 +126,15 @@ func TestCheckCallerAuth_AuthSettings_EnforcesFailClosedRule(t *testing.T) {
 		{"no authenticator", nil, errNoCallerAuth},
 		{"no authenticator, anonymous off", map[string]string{"ALLOW_ANONYMOUS": "false"}, errNoCallerAuth},
 		{"nvcf auth", map[string]string{"NVCF_GRPC_ADDR": "api.nvcf.svc.cluster.local:9090"}, nil},
-		{"caller keys", map[string]string{"CALLER_KEYS_FILE": "/etc/caller-keys.yaml"}, nil},
+		{"caller keys", map[string]string{"API_KEYS_PATH": "/etc/caller-keys.yaml"}, nil},
 		{"anonymous", map[string]string{"ALLOW_ANONYMOUS": "true"}, nil},
 		{"anonymous with nvcf auth", map[string]string{
 			"ALLOW_ANONYMOUS": "true",
 			"NVCF_GRPC_ADDR":  "api.nvcf.svc.cluster.local:9090",
 		}, errAnonymousWithCallerAuth},
 		{"anonymous with caller keys", map[string]string{
-			"ALLOW_ANONYMOUS":  "true",
-			"CALLER_KEYS_FILE": "/etc/caller-keys.yaml",
+			"ALLOW_ANONYMOUS": "true",
+			"API_KEYS_PATH":   "/etc/caller-keys.yaml",
 		}, errAnonymousWithCallerAuth},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

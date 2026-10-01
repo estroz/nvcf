@@ -44,7 +44,7 @@ data:
   BARE_MODEL_NAMES_ENABLED: {{ $cfg.bareModelNamesEnabled | toString | quote }}
   PUBLIC_READ_ENDPOINTS: {{ $cfg.publicReadEndpoints | toString | quote }}
   {{- if eq $authMode "callerKeys" }}
-  CALLER_KEYS_FILE: "/etc/llm-api-gateway/caller-keys/caller-keys.yaml"
+  API_KEYS_PATH: "/etc/llm-api-gateway/caller-keys/caller-keys.yaml"
   {{- else if eq $authMode "anonymous" }}
   ALLOW_ANONYMOUS: "true"
   {{- end }}

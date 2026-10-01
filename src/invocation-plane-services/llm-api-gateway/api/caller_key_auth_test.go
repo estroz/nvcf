@@ -89,7 +89,7 @@ var callerKeyModelNameForms = []struct {
 // newCallerKeyAPI wires the gateway with caller keys the way server.go does,
 // in front of a stub router that serves the model listing and records the
 // headers of every inference request it receives.
-func newCallerKeyAPI(t *testing.T, bareModelNamesEnabled bool) (*echo.Echo, chan http.Header) {
+func newCallerKeyAPI(t *testing.T, bareModelNamesEnabled, publicDiscoveryReads bool) (*echo.Echo, chan http.Header) {
 	t.Helper()
 
 	received := make(chan http.Header, 1)
@@ -128,7 +128,7 @@ func newCallerKeyAPI(t *testing.T, bareModelNamesEnabled bool) (*echo.Echo, chan
 	cfg.BareModelNamesEnabled = bareModelNamesEnabled
 	e := echo.New()
 	e.Use(NewContextMiddleware(cfg))
-	e.Use(NewCallerKeyAuthMiddleware(keys))
+	e.Use(NewCallerKeyAuthMiddleware(keys, publicDiscoveryReads))
 	RegisterRoutes(e, NewHandlers(cfg, stargate, nil, nil))
 	return e, received
 }
@@ -168,7 +168,7 @@ func TestCallerKeyAuth_Endpoint_RequiresListedKey(t *testing.T) {
 				t.Run(form.name+"/"+credential.name+"/"+endpoint.name, func(t *testing.T) {
 					t.Parallel()
 
-					e, received := newCallerKeyAPI(t, form.isBareEnabled)
+					e, received := newCallerKeyAPI(t, form.isBareEnabled, false)
 					rec := httptest.NewRecorder()
 					e.ServeHTTP(rec, newCallerKeyRequest(
 						endpoint.method, endpoint.path, endpoint.body, form.model, credential.authorization,
@@ -203,7 +203,7 @@ func TestCallerKeyAuth_ModelNameForms_RouteWithModelRoutingKey(t *testing.T) {
 			t.Run(form.name+"/"+endpoint.name, func(t *testing.T) {
 				t.Parallel()
 
-				e, received := newCallerKeyAPI(t, form.isBareEnabled)
+				e, received := newCallerKeyAPI(t, form.isBareEnabled, false)
 				req := newCallerKeyRequest(
 					endpoint.method, endpoint.path, endpoint.body, form.model, "Bearer "+listedCallerKey,
 				)
@@ -223,6 +223,26 @@ func TestCallerKeyAuth_ModelNameForms_RouteWithModelRoutingKey(t *testing.T) {
 	}
 }
 
+func TestCallerKeyAuth_PublicDiscoveryReads_SkipKeyOnlyForDiscovery(t *testing.T) {
+	t.Parallel()
+
+	for _, endpoint := range callerKeyEndpoints {
+		t.Run(endpoint.name, func(t *testing.T) {
+			t.Parallel()
+
+			e, _ := newCallerKeyAPI(t, true, true)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, newCallerKeyRequest(endpoint.method, endpoint.path, endpoint.body, bareModelName, ""))
+
+			wantStatus := http.StatusUnauthorized
+			if endpoint.method == http.MethodGet {
+				wantStatus = http.StatusOK
+			}
+			require.Equal(t, wantStatus, rec.Code, rec.Body.String())
+		})
+	}
+}
+
 func TestCallerKeyAuth_ProbeAndInfoRoutes_NeedNoKey(t *testing.T) {
 	t.Parallel()
 
@@ -230,7 +250,7 @@ func TestCallerKeyAuth_ProbeAndInfoRoutes_NeedNoKey(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 
-			e, _ := newCallerKeyAPI(t, true)
+			e, _ := newCallerKeyAPI(t, true, false)
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 
@@ -246,7 +266,7 @@ func TestCallerKeyAuth_AuthenticatedRequest_LogsKeyIDNotKey(t *testing.T) {
 	zlog.Logger = zerolog.New(&logs)
 	t.Cleanup(func() { zlog.Logger = oldLogger })
 
-	e, received := newCallerKeyAPI(t, true)
+	e, received := newCallerKeyAPI(t, true, false)
 	rec := httptest.NewRecorder()
 	endpoint := callerKeyInferenceEndpoints[0]
 	e.ServeHTTP(rec, newCallerKeyRequest(

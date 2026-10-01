@@ -202,6 +202,10 @@ Useful overrides:
   callers without a key (Helm: `config.allowAnonymous`). The gateway logs a
   warning at startup. It cannot be combined with `NVCF_GRPC_ADDR` or
   `CALLER_KEYS_FILE`.
+- `PUBLIC_READ_ENDPOINTS=true` to serve `GET /v1/models`, `GET /v1/models/{id}`,
+  and `GET /v1/registry` without a caller key when `CALLER_KEYS_FILE` is set
+  (Helm: `config.publicReadEndpoints`). Inference routes still need a key. The
+  gateway logs a warning at startup.
 - `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve the listener over TLS (Helm:
   `tls.enabled` and `tls.existingSecret`). Set both or neither. The pair is
   re-read every `TLS_RELOAD_INTERVAL` (default `30s`); a renewed pair applies

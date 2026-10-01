@@ -38,9 +38,18 @@ var routesWithoutCallerKey = map[string]struct{}{
 	"/info":    {},
 }
 
+// Discovery reads skip the key only when public discovery reads are enabled.
+// Matched by route pattern, so /v1/models/{id} is covered.
+var discoveryReadRoutes = map[string]struct{}{
+	"/v1/models":           {},
+	modelsPathPrefix + "*": {},
+	"/v1/registry":         {},
+}
+
 // NewCallerKeyAuthMiddleware authenticates callers against static API keys in
-// place of NVCF auth. A nil key set disables it.
-func NewCallerKeyAuthMiddleware(keys *callerkeys.KeySet) echo.MiddlewareFunc {
+// place of NVCF auth. A nil key set disables it. With publicDiscoveryReads,
+// GET on the model and registry routes needs no key.
+func NewCallerKeyAuthMiddleware(keys *callerkeys.KeySet, publicDiscoveryReads bool) echo.MiddlewareFunc {
 	if keys == nil {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next
@@ -51,6 +60,11 @@ func NewCallerKeyAuthMiddleware(keys *callerkeys.KeySet) echo.MiddlewareFunc {
 		return func(ec echo.Context) error {
 			if _, ok := routesWithoutCallerKey[ec.Path()]; ok {
 				return next(ec)
+			}
+			if publicDiscoveryReads && ec.Request().Method == http.MethodGet {
+				if _, ok := discoveryReadRoutes[ec.Path()]; ok {
+					return next(ec)
+				}
 			}
 
 			apiKey := bearerTokenFromHeader(ec.Request().Header.Get(echo.HeaderAuthorization))

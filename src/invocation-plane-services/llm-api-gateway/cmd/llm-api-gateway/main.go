@@ -54,6 +54,9 @@ func main() {
 	if cfg.AllowAnonymous {
 		zlog.Warn().Msg("ALLOW_ANONYMOUS is set: callers are not authenticated")
 	}
+	if cfg.PublicReadEndpoints && cfg.CallerKeysFile != "" {
+		zlog.Warn().Msg("PUBLIC_READ_ENDPOINTS is set: model and registry reads need no caller key")
+	}
 
 	observability, err := telemetry.Init(context.Background(), telemetry.RuntimeConfig{
 		MetricsPort:        cfg.Telemetry.MetricsPort,

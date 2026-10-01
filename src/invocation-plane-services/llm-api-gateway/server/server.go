@@ -54,7 +54,7 @@ func New(
 	e.Use(echoMiddleware.Recover())
 	e.Use(api.NewContextMiddleware(cfg))
 	e.Use(api.NewNVCFAuthMiddleware(authClient))
-	e.Use(api.NewCallerKeyAuthMiddleware(callerKeys))
+	e.Use(api.NewCallerKeyAuthMiddleware(callerKeys, cfg != nil && cfg.PublicReadEndpoints))
 
 	// Start and StartTLS replace e.Start and e.StartTLS, which would overwrite
 	// this handler. Both serve on e.Server, so TLS gets the same handler and

@@ -57,6 +57,9 @@ type Config struct {
 	// AllowAnonymous lets the gateway start with no authenticator and admit
 	// callers without a key.
 	AllowAnonymous bool
+	// PublicReadEndpoints serves GET /v1/models, /v1/models/{id} and
+	// /v1/registry without a caller key. Only applies with CallerKeysFile.
+	PublicReadEndpoints bool
 }
 
 var (
@@ -306,6 +309,9 @@ func LoadFromEnv() (*Config, error) {
 
 	if v, ok := errs.boolean("ALLOW_ANONYMOUS"); ok {
 		cfg.AllowAnonymous = v
+	}
+	if v, ok := errs.boolean("PUBLIC_READ_ENDPOINTS"); ok {
+		cfg.PublicReadEndpoints = v
 	}
 	if path := os.Getenv("CALLER_KEYS_FILE"); path != "" {
 		cfg.CallerKeysFile = path

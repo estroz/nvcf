@@ -545,3 +545,37 @@ func TestServerConfigTLSEnabledFailsClosedOnHalfPair(t *testing.T) {
 		t.Fatal("tls enabled = false for key-only pair, want true")
 	}
 }
+
+func TestLoadFromEnvReadsPublicReadEndpoints(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    bool
+		wantErr bool
+	}{
+		{name: "default off", raw: "", want: false},
+		{name: "enabled", raw: "true", want: true},
+		{name: "disabled", raw: "false", want: false},
+		{name: "invalid", raw: "sometimes", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PUBLIC_READ_ENDPOINTS", tc.raw)
+
+			cfg, err := LoadFromEnv()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "PUBLIC_READ_ENDPOINTS") {
+					t.Fatalf("LoadFromEnv() error = %v, want one naming PUBLIC_READ_ENDPOINTS", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+			if cfg.PublicReadEndpoints != tc.want {
+				t.Fatalf("public read endpoints = %v, want %v", cfg.PublicReadEndpoints, tc.want)
+			}
+		})
+	}
+}

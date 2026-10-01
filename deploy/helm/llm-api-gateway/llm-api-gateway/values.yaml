@@ -87,6 +87,9 @@ llmApiGateway:
     # The gateway refuses to start with neither nvcfGrpcAddr nor callerKeys
     # unless this is true, and refuses to start when it is combined with them.
     allowAnonymous: false
+    # With callerKeys, serve GET /v1/models, /v1/models/{id} and /v1/registry
+    # without a key. Inference still needs one. Logged as a warning at startup.
+    publicReadEndpoints: false
     localFunctionId: ""
     defaultModel: ""
     defaultRpm: 120

@@ -199,7 +199,7 @@ reads the names of the Secrets it renders, so change them there.
 | `llm-api-gateway.llmApiGateway.callerKeys.enabled` | `true` |
 | `llm-api-gateway.llmApiGateway.callerKeys.secretName` | `llm-gateway-stack-api-keys` |
 | `llm-api-gateway.llmApiGateway.callerKeys.secretKey` | `caller-keys.yaml` |
-| `llm-api-gateway.llmApiGateway.vault.noVaultAnnotations` | `true` |
+| `llm-api-gateway.llmApiGateway.vault.enabled` | `false` |
 | `llm-api-gateway.llmApiGateway.tls.enabled` | `true` |
 | `llm-api-gateway.llmApiGateway.tls.existingSecret` | `llm-gateway-stack-gateway-tls` |
 

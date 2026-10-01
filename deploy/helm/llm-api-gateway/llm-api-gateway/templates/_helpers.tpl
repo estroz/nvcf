@@ -108,6 +108,14 @@ Config checksum
 {{- end }}
 
 {{/*
+Vault Agent integration: annotations, the vault-token and vault-config-templates
+volumes, and the agent template ConfigMap. Renders "true" or nothing.
+*/}}
+{{- define "llm-api-gateway.vaultEnabled" -}}
+{{- if dig "vault" "enabled" true .Values.llmApiGateway -}}true{{- end -}}
+{{- end }}
+
+{{/*
 Vault audience
 */}}
 {{- define "llm-api-gateway.vaultAudience" -}}
@@ -149,7 +157,7 @@ Generate all pod annotations
 {{- $annotations = merge $annotations .Values.llmApiGateway.podAnnotations -}}
 {{- end -}}
 
-{{- if not (and .Values.llmApiGateway.vault .Values.llmApiGateway.vault.noVaultAnnotations) -}}
+{{- if and (include "llm-api-gateway.vaultEnabled" .) (not (and .Values.llmApiGateway.vault .Values.llmApiGateway.vault.noVaultAnnotations)) -}}
 {{- $vaultAnnotations := include "llm-api-gateway.vaultAnnotations" . | fromYaml -}}
 {{- if $vaultAnnotations -}}
 {{- $annotations = merge $annotations $vaultAnnotations -}}

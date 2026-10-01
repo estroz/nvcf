@@ -147,7 +147,7 @@ llm-api-gateway:
       secretName: llm-gateway-stack-api-keys
       secretKey: caller-keys.yaml
     vault:
-      noVaultAnnotations: true
+      enabled: false
     tls:
       enabled: true
       existingSecret: llm-gateway-stack-gateway-tls

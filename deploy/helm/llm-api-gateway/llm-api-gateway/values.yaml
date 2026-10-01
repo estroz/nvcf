@@ -123,6 +123,10 @@ llmApiGateway:
       create: true
 
   vault:
+    # false drops the Vault Agent annotations, the vault-token and
+    # vault-config-templates volumes and the agent template ConfigMap, for
+    # deployments without Vault. noVaultAnnotations drops only the annotations.
+    enabled: true
     audience: ""
 
   # Authenticate callers with static API keys instead of NVCF auth, for

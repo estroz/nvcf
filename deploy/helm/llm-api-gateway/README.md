@@ -70,7 +70,7 @@ Important settings to review before deployment:
 - `llmApiGateway.metrics.enabled` to expose a metrics port on the Service and Deployment (default: `false`)
 - `llmApiGateway.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)
 - `llmApiGateway.olric.*` for embedded rate-limit state and peer discovery
-- `llmApiGateway.vault.*` for JWT authentication path, role, and audience values used by the Vault Agent injector
+- `llmApiGateway.vault.*` to turn the Vault Agent off (`vault.enabled`) and for the JWT authentication path, role, and audience values used by the Vault Agent injector
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 

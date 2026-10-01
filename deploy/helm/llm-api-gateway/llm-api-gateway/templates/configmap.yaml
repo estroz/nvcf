@@ -32,7 +32,10 @@ data:
   NVCF_GRPC_ADDR: {{ $cfg.nvcfGrpcAddr | quote }}
   NVCF_GRPC_INSECURE: {{ $cfg.nvcfGrpcInsecure | toString | quote }}
   NVCF_GRPC_TIMEOUT: {{ $cfg.nvcfGrpcTimeout | quote }}
+  {{- /* The Vault Agent writes this file. NVCF auth needs the path to start. */}}
+  {{- if or $cfg.nvcfGrpcAddr (include "llm-api-gateway.vaultEnabled" .) }}
   SECRETS_PATH: "/vault/secrets/secrets.json"
+  {{- end }}
   RATE_LIMIT_ENABLED: {{ $cfg.rateLimitEnabled | toString | quote }}
   RATE_LIMIT_FAIL_OPEN: {{ $cfg.rateLimitFailOpen | toString | quote }}
   BARE_MODEL_NAMES_ENABLED: {{ $cfg.bareModelNamesEnabled | toString | quote }}

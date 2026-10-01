@@ -211,10 +211,14 @@ router_http_port="$(yq -r "select(.kind == \"Service\" and .metadata.name == \"$
 [ "$(gateway_config "${manifest}" STARGATE_URL)" = "http://${router}:${router_http_port}" ] ||
   fail "gateway must reach the router Service in its namespace"
 
-# No Vault Agent. The gateway chart still renders an unused SECRETS_PATH and
-# token volume; neither needs Vault to start.
+# No Vault Agent.
 [ "$(vault_annotations "${manifest}" "${router}")" = "0" ] || fail "router must not carry Vault Agent annotations"
 [ "$(vault_annotations "${manifest}" "${gateway}")" = "0" ] || fail "gateway must not carry Vault Agent annotations"
+! gateway_config_has "${manifest}" SECRETS_PATH || fail "gateway must not read Vault secrets"
+[ -z "$(deployment "${manifest}" "${gateway}" '(.spec.template.spec.volumes // []) | .[] | select(.name | test("^vault-")) | .name')" ] ||
+  fail "gateway must not mount Vault volumes"
+[ "$(count "${manifest}" ConfigMap "${gateway}-vault-agent-tpl")" = "0" ] ||
+  fail "gateway must not render the Vault Agent template ConfigMap"
 
 # Self-signed TLS: CA, CA ConfigMap and two server Secrets.
 for secret in "${ca_name}" "${router_tls_secret}" "${gateway_tls_secret}"; do

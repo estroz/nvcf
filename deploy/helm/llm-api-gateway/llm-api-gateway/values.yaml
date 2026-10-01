@@ -135,6 +135,13 @@ llmApiGateway:
     # Key in the Secret that holds the file.
     secretKey: caller-keys.yaml
 
+  # Serve the listener over TLS. The kubernetes.io/tls Secret existingSecret is
+  # mounted at /etc/llm-api-gateway/tls and the probes use HTTPS. The gateway
+  # re-reads the pair every 30 s, so a renewed certificate needs no restart.
+  tls:
+    enabled: false
+    existingSecret: ""
+
   metrics:
     enabled: false
     port: 9464

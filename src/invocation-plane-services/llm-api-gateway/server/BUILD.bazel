@@ -24,6 +24,7 @@ go_library(
         "//src/invocation-plane-services/llm-api-gateway/api",
         "//src/invocation-plane-services/llm-api-gateway/callerkeys",
         "//src/invocation-plane-services/llm-api-gateway/config",
+        "//src/invocation-plane-services/llm-api-gateway/internal/tlsreload",
         "//src/invocation-plane-services/llm-api-gateway/provider",
         "//src/invocation-plane-services/llm-api-gateway/ratelimit",
         "//src/invocation-plane-services/llm-api-gateway/ratelimitsync",
@@ -47,5 +48,6 @@ go_test(
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/config",
         "//src/invocation-plane-services/llm-api-gateway/provider",
+        "@com_github_labstack_echo_v4//:echo",
     ],
 )

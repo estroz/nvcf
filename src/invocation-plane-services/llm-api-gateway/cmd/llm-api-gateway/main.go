@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	echo "github.com/labstack/echo/v4"
 	zlog "github.com/rs/zerolog/log"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/callerkeys"
@@ -113,10 +114,41 @@ func main() {
 		ctx,
 		cfg.Server.Addr,
 		shutdownTimeout(cfg.Server.WriteTimeout),
-		func(addr string) error { return server.Start(e, addr) },
+		gatewayStart(echoStarter{e: e}, cfg.Server),
 		e.Shutdown,
 	); err != nil {
 		zlog.Fatal().Err(err).Msg("gateway exited unexpectedly")
+	}
+}
+
+// gatewayStarter starts the listener, in plaintext or over TLS.
+type gatewayStarter interface {
+	Start(address string) error
+	StartTLS(address, certFile, keyFile string, reloadInterval time.Duration) error
+}
+
+// echoStarter starts the gateway through server.Start and server.StartTLS.
+// e.Start and e.StartTLS would drop the handler server.New installs.
+type echoStarter struct {
+	e *echo.Echo
+}
+
+func (s echoStarter) Start(address string) error {
+	return server.Start(s.e, address)
+}
+
+func (s echoStarter) StartTLS(address, certFile, keyFile string, reloadInterval time.Duration) error {
+	return server.StartTLS(s.e, address, certFile, keyFile, reloadInterval)
+}
+
+// gatewayStart picks the listener for runGateway. Any TLS file selects TLS,
+// so a half-configured pair fails at startup instead of serving plaintext.
+func gatewayStart(s gatewayStarter, serverCfg config.ServerConfig) func(string) error {
+	if !serverCfg.TLSEnabled() {
+		return s.Start
+	}
+	return func(addr string) error {
+		return s.StartTLS(addr, serverCfg.TLSCertFile, serverCfg.TLSKeyFile, serverCfg.TLSReloadInterval)
 	}
 }
 

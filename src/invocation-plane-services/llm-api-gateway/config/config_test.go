@@ -445,3 +445,103 @@ func TestLoadFromEnvRejectsInvalidStargateListingCacheTTL(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultTLSConfig(t *testing.T) {
+	cfg := Default()
+
+	if cfg.Server.TLSEnabled() {
+		t.Fatal("tls enabled = true, want false by default")
+	}
+	if cfg.Server.TLSReloadInterval != DefaultTLSReloadInterval || DefaultTLSReloadInterval != 30*time.Second {
+		t.Fatalf("tls reload interval = %s, want 30s", cfg.Server.TLSReloadInterval)
+	}
+}
+
+func TestLoadFromEnvTLSPairValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		certFile    string
+		keyFile     string
+		wantErrKey  string
+		wantEnabled bool
+	}{
+		{name: "neither", wantEnabled: false},
+		{name: "both", certFile: "/tls/tls.crt", keyFile: "/tls/tls.key", wantEnabled: true},
+		{name: "cert only", certFile: "/tls/tls.crt", wantErrKey: "TLS_KEY_FILE"},
+		{name: "key only", keyFile: "/tls/tls.key", wantErrKey: "TLS_CERT_FILE"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TLS_CERT_FILE", tc.certFile)
+			t.Setenv("TLS_KEY_FILE", tc.keyFile)
+
+			cfg, err := LoadFromEnv()
+			if tc.wantErrKey != "" {
+				if err == nil {
+					t.Fatal("LoadFromEnv() error = nil, want error")
+				}
+				if !strings.Contains(err.Error(), tc.wantErrKey) {
+					t.Fatalf("error %q does not mention %s", err.Error(), tc.wantErrKey)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+			if cfg.Server.TLSEnabled() != tc.wantEnabled {
+				t.Fatalf("tls enabled = %v, want %v", cfg.Server.TLSEnabled(), tc.wantEnabled)
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvTLSReloadInterval(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "default", want: 30 * time.Second},
+		{name: "override", raw: "5s", want: 5 * time.Second},
+		{name: "minutes", raw: "2m", want: 2 * time.Minute},
+		{name: "missing unit", raw: "30", wantErr: true},
+		{name: "zero", raw: "0s", wantErr: true},
+		{name: "negative", raw: "-1s", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TLS_RELOAD_INTERVAL", tc.raw)
+
+			cfg, err := LoadFromEnv()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("LoadFromEnv() error = nil, want error")
+				}
+				if !strings.Contains(err.Error(), "TLS_RELOAD_INTERVAL") {
+					t.Fatalf("error %q does not mention TLS_RELOAD_INTERVAL", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+			if cfg.Server.TLSReloadInterval != tc.want {
+				t.Fatalf("tls reload interval = %s, want %s", cfg.Server.TLSReloadInterval, tc.want)
+			}
+		})
+	}
+}
+
+func TestServerConfigTLSEnabledFailsClosedOnHalfPair(t *testing.T) {
+	// A half pair can only come from a Config built outside LoadFromEnv; it
+	// must still select TLS so startup fails instead of serving plaintext.
+	if !(ServerConfig{TLSCertFile: "/tls/tls.crt"}).TLSEnabled() {
+		t.Fatal("tls enabled = false for cert-only pair, want true")
+	}
+	if !(ServerConfig{TLSKeyFile: "/tls/tls.key"}).TLSEnabled() {
+		t.Fatal("tls enabled = false for key-only pair, want true")
+	}
+}

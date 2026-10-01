@@ -101,6 +101,9 @@ spec:
             httpGet:
               path: /healthz
               port: http
+              {{- if .Values.llmApiGateway.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 12
@@ -108,12 +111,18 @@ spec:
             httpGet:
               path: /readyz
               port: http
+              {{- if .Values.llmApiGateway.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 5
             timeoutSeconds: 2
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
+              {{- if .Values.llmApiGateway.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 10
             timeoutSeconds: 2
           resources:
@@ -129,6 +138,13 @@ spec:
             # Secret changes, and the gateway re-reads the file every 30 s.
             - name: caller-keys
               mountPath: /etc/llm-api-gateway/caller-keys
+              readOnly: true
+            {{- end }}
+            {{- if .Values.llmApiGateway.tls.enabled }}
+            # A directory mount, not subPath, so a renewed certificate reaches
+            # the gateway's 30 s reload.
+            - name: tls
+              mountPath: /etc/llm-api-gateway/tls
               readOnly: true
             {{- end }}
       volumes:
@@ -154,4 +170,14 @@ spec:
               - key: {{ .secretKey | quote }}
                 path: caller-keys.yaml
         {{- end }}
+        {{- end }}
+        {{- if .Values.llmApiGateway.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ required "llmApiGateway.tls.existingSecret is required when tls.enabled is true" .Values.llmApiGateway.tls.existingSecret | quote }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
         {{- end }}

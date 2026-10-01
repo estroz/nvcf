@@ -40,6 +40,10 @@ data:
   {{- if .Values.llmApiGateway.callerKeys.enabled }}
   CALLER_KEYS_FILE: "/etc/llm-api-gateway/caller-keys/caller-keys.yaml"
   {{- end }}
+  {{- if .Values.llmApiGateway.tls.enabled }}
+  TLS_CERT_FILE: "/etc/llm-api-gateway/tls/tls.crt"
+  TLS_KEY_FILE: "/etc/llm-api-gateway/tls/tls.key"
+  {{- end }}
   {{- with .Values.llmApiGateway.olric }}
   {{- if .enabled }}
   OLRIC_ENABLED: "true"

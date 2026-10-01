@@ -202,6 +202,11 @@ Useful overrides:
   callers without a key (Helm: `config.allowAnonymous`). The gateway logs a
   warning at startup. It cannot be combined with `NVCF_GRPC_ADDR` or
   `CALLER_KEYS_FILE`.
+- `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve the listener over TLS (Helm:
+  `tls.enabled` and `tls.existingSecret`). Set both or neither. The pair is
+  re-read every `TLS_RELOAD_INTERVAL` (default `30s`); a renewed pair applies
+  to new connections without a restart, and a pair that fails to load keeps
+  the previous one.
 - `OLRIC_ENABLED=false` to skip starting the embedded Olric node
 - `OLRIC_BIND_PORT`, `OLRIC_MEMBERLIST_BIND_PORT`, and `OLRIC_PEERS` for
   multi-instance Olric clustering

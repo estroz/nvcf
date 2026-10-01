@@ -82,6 +82,24 @@ type ServerConfig struct {
 	// MaxRequestBodyBytes rejects larger request bodies with 413. Zero disables
 	// the limit.
 	MaxRequestBodyBytes int64
+	// TLSCertFile and TLSKeyFile enable TLS on the listener. Both or neither
+	// must be set.
+	TLSCertFile string
+	TLSKeyFile  string
+	// TLSReloadInterval is how often the TLS files are checked for a renewed
+	// pair while serving. A changed pair is served to new connections
+	// without a restart.
+	TLSReloadInterval time.Duration
+}
+
+// DefaultTLSReloadInterval is the TLS_RELOAD_INTERVAL default.
+const DefaultTLSReloadInterval = 30 * time.Second
+
+// TLSEnabled reports whether the listener is configured for TLS. A
+// half-configured pair also counts, so startup fails instead of silently
+// serving plaintext.
+func (c ServerConfig) TLSEnabled() bool {
+	return c.TLSCertFile != "" || c.TLSKeyFile != ""
 }
 
 type TelemetryConfig struct {
@@ -225,6 +243,7 @@ func Default() *Config {
 			InferenceWriteTimeout: 60 * time.Second,
 			IdleTimeout:           60 * time.Second,
 			Region:                "global",
+			TLSReloadInterval:     DefaultTLSReloadInterval,
 		},
 		Stargate: StargateConfig{
 			URL:             "http://127.0.0.1:8000",
@@ -295,6 +314,8 @@ func LoadFromEnv() (*Config, error) {
 		}
 	}
 
+	applyTLSEnv(cfg, &errs)
+
 	// SecretsPath is populated by applyStargateNVCFEnv above.
 	cfg.Telemetry.TracingAccessToken = loadTracingAccessToken(cfg.NVCF.SecretsPath)
 
@@ -302,6 +323,29 @@ func LoadFromEnv() (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func applyTLSEnv(cfg *Config, errs *envErrs) {
+	if certFile := os.Getenv("TLS_CERT_FILE"); certFile != "" {
+		cfg.Server.TLSCertFile = certFile
+	}
+	if keyFile := os.Getenv("TLS_KEY_FILE"); keyFile != "" {
+		cfg.Server.TLSKeyFile = keyFile
+	}
+	if interval, ok := errs.duration("TLS_RELOAD_INTERVAL"); ok {
+		if interval <= 0 {
+			errs.add("TLS_RELOAD_INTERVAL", os.Getenv("TLS_RELOAD_INTERVAL"), errors.New("must be > 0"))
+		} else {
+			cfg.Server.TLSReloadInterval = interval
+		}
+	}
+
+	switch {
+	case cfg.Server.TLSCertFile != "" && cfg.Server.TLSKeyFile == "":
+		errs.add("TLS_KEY_FILE", "", errors.New("must be set together with TLS_CERT_FILE"))
+	case cfg.Server.TLSCertFile == "" && cfg.Server.TLSKeyFile != "":
+		errs.add("TLS_CERT_FILE", "", errors.New("must be set together with TLS_KEY_FILE"))
+	}
 }
 
 // CheckCallerAuth applies the gateway's fail-closed startup rule. LoadFromEnv

@@ -19,15 +19,28 @@ package server
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	echo "github.com/labstack/echo/v4"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
@@ -472,4 +485,210 @@ func pacedStargate(t *testing.T, gaps []time.Duration) *httptest.Server {
 	}))
 	t.Cleanup(upstream.Close)
 	return upstream
+}
+
+func TestStartTLSServesOnConfiguredServer(t *testing.T) {
+	t.Parallel()
+
+	certFile, keyFile := writeSelfSignedCert(t)
+	e, addr := startTLSGateway(t, certFile, keyFile, time.Hour)
+
+	resp := getHealthz(t, newTLSClient(t, false), addr)
+	if resp.StatusCode != http.StatusOK || resp.TLS == nil {
+		t.Fatalf("status = %d, tls = %v, want 200 over TLS", resp.StatusCode, resp.TLS != nil)
+	}
+	// e.StartTLS would serve from e.TLSServer with the bare Echo handler.
+	if e.Server.Addr != addr || e.Server.Handler == http.Handler(e) {
+		t.Fatal("StartTLS did not serve through the handler New installed on e.Server")
+	}
+	if cfg := e.Server.TLSConfig; cfg == nil || cfg.GetCertificate == nil || cfg.MinVersion != tls.VersionTLS12 ||
+		!slices.Equal(cfg.NextProtos, []string{"h2", "http/1.1"}) {
+		t.Fatalf("tls config = %+v, want GetCertificate, TLS 1.2 minimum, h2 and http/1.1", cfg)
+	}
+}
+
+func TestStartTLSServesRenewedCertificate(t *testing.T) {
+	t.Parallel()
+
+	certFile, keyFile := writeSelfSignedCert(t)
+	_, addr := startTLSGateway(t, certFile, keyFile, 10*time.Millisecond)
+
+	// This client keeps its connection from before the renewal.
+	kept := newTLSClient(t, false)
+	if got := servedSerial(t, getHealthz(t, kept, addr)); got != 1 {
+		t.Fatalf("serial before renewal = %d, want 1", got)
+	}
+
+	// Renew in place, as cert-manager does, while the gateway keeps serving.
+	writeSelfSignedPair(t, certFile, keyFile, 2)
+
+	fresh := newTLSClient(t, true)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp := getHealthz(t, fresh, addr)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status after renewal = %d, want 200", resp.StatusCode)
+		}
+		if servedSerial(t, resp) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("new connections still get serial 1 five seconds after the renewal")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The renewal does not disturb a connection that was already open.
+	resp := getHealthz(t, kept, addr)
+	if resp.StatusCode != http.StatusOK || servedSerial(t, resp) != 1 {
+		t.Fatalf("kept connection: status = %d, serial = %d, want 200 on the original serial 1",
+			resp.StatusCode, servedSerial(t, resp))
+	}
+}
+
+func TestStartTLSFailsWithoutLoadablePair(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(config.Default(), provider.NewEchoProvider(), nil, nil)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	dir := t.TempDir()
+	err = StartTLS(e, "127.0.0.1:0", filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key"), time.Second)
+	if err == nil || errors.Is(err, http.ErrServerClosed) || !strings.Contains(err.Error(), "tls.crt") {
+		t.Fatalf("StartTLS() error = %v, want a load error naming the certificate file", err)
+	}
+}
+
+// startTLSGateway serves a gateway through StartTLS on a free local port and
+// shuts it down when the test ends.
+func startTLSGateway(t *testing.T, certFile, keyFile string, reloadInterval time.Duration) (*echo.Echo, string) {
+	t.Helper()
+
+	e, err := New(config.Default(), provider.NewEchoProvider(), nil, nil)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	served := make(chan error, 1)
+	go func() {
+		served <- StartTLS(e, addr, certFile, keyFile, reloadInterval)
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = e.Shutdown(ctx)
+		if err := <-served; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("serve: %v", err)
+		}
+	})
+	return e, addr
+}
+
+// newTLSClient trusts any certificate. With fresh set, every request opens a
+// new connection and so a new handshake.
+func newTLSClient(t *testing.T, fresh bool) *http.Client {
+	t.Helper()
+
+	transport := &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // self-signed test cert
+		DisableKeepAlives: fresh,
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	return &http.Client{Transport: transport, Timeout: 5 * time.Second}
+}
+
+// getHealthz sends GET /healthz, retrying until the listener is up, and reads
+// the body so a kept-alive connection can be reused.
+func getHealthz(t *testing.T, client *http.Client, addr string) *http.Response {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := client.Get("https://" + addr + "/healthz")
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			return resp
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET /healthz over TLS: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func servedSerial(t *testing.T, resp *http.Response) int64 {
+	t.Helper()
+
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		t.Fatal("response was not served over TLS")
+	}
+	return resp.TLS.PeerCertificates[0].SerialNumber.Int64()
+}
+
+func writeSelfSignedCert(t *testing.T) (certFile, keyFile string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	certFile = filepath.Join(dir, "tls.crt")
+	keyFile = filepath.Join(dir, "tls.key")
+	writeSelfSignedPair(t, certFile, keyFile, 1)
+	return certFile, keyFile
+}
+
+// writeSelfSignedPair writes a self-signed pair for 127.0.0.1 with the given
+// serial. A replaced file's modification time moves forward by a second so
+// the change is visible regardless of the filesystem's timestamp resolution.
+func writeSelfSignedPair(t *testing.T, certFile, keyFile string, serial int64) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: "127.0.0.1"},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, file := range []struct {
+		path string
+		data []byte
+	}{
+		{certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})},
+		{keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})},
+	} {
+		previous, statErr := os.Stat(file.path)
+		if err := os.WriteFile(file.path, file.data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if statErr == nil {
+			next := previous.ModTime().Add(time.Second)
+			if err := os.Chtimes(file.path, next, next); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }

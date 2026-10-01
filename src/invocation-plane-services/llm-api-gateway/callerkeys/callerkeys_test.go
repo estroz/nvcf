@@ -125,6 +125,11 @@ func TestLoad_InvalidFile_FailsToLoad(t *testing.T) {
 			content: "keys:\n  - {id: demo-ui, sha256: " + demoUIKeyHash + ", key: demo-ui-key}\n",
 			wantErr: "field key not found",
 		},
+		{
+			name:    "no keys",
+			content: "keys: []\n",
+			wantErr: "caller key set has no keys",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -254,7 +259,7 @@ func TestKeySetLookup_ZeroValue_RejectsKey(t *testing.T) {
 func TestKeySetRefresh_InvalidFile_KeepsLastGoodSetAndLogsError(t *testing.T) {
 	t.Parallel()
 
-	// Each file also lists the laptop key, which must not become valid.
+	// Each file with keys also lists the laptop key, which must not become valid.
 	for _, tc := range []struct {
 		name       string
 		newContent string
@@ -278,6 +283,11 @@ func TestKeySetRefresh_InvalidFile_KeepsLastGoodSetAndLogsError(t *testing.T) {
 				"  - {id: demo-ui, sha256: " + laptopKeyHash + "}\n" +
 				"  - {id: laptop, sha256: " + laptopKeyHash + "}\n",
 			wantLog: "repeats the sha256 of another key",
+		},
+		{
+			name:       "no keys",
+			newContent: "keys: []\n",
+			wantLog:    "caller key set has no keys",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

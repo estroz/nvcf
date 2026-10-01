@@ -25,6 +25,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -35,6 +36,8 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
+
+var errNoKeys = errors.New("caller key set has no keys")
 
 // Entry is one caller key as a store holds it: a name and the hex SHA-256 of
 // the plain key. Stores hold hashes only.
@@ -127,6 +130,10 @@ func loadKeys(ctx context.Context, store Store) ([]key, error) {
 	entries, err := store.Entries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load caller keys: %w", err)
+	}
+	// With no keys every request fails; refuse the set so startup fails instead.
+	if len(entries) == 0 {
+		return nil, errNoKeys
 	}
 
 	keys := make([]key, 0, len(entries))

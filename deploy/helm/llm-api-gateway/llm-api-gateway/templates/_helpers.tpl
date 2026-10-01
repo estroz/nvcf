@@ -156,5 +156,8 @@ Generate all pod annotations
 {{- end -}}
 {{- end -}}
 
+{{- /* Empty renders nothing: "{}" would break the checksum annotation that follows. */ -}}
+{{- if $annotations -}}
 {{- toYaml $annotations -}}
+{{- end -}}
 {{- end }}

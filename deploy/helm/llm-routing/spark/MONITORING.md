@@ -13,7 +13,7 @@ Component /metrics endpoints
 
 The example configuration and `spark.py init` enable monitoring. `spark.py stack` installs it after the routing services. Older configuration files that omit `monitoring` keep it disabled.
 
-The three monitoring Deployments run on `nodes.control`. Default resource requests total 300 millicores and 512 MiB of memory. Memory limits total 1792 MiB. VictoriaMetrics uses a separate 5 GiB PVC. Grafana stores its local database on an ephemeral volume and reloads the dashboard and data source after restart. Save dashboard changes in the repository.
+The three monitoring Deployments run on `nodes.control`. Default resource requests total 300 millicores and 896 MiB of memory. Memory limits total 2304 MiB. Grafana requests 512 MiB and allows up to 1 GiB for dashboard rendering. VictoriaMetrics uses a separate 5 GiB PVC. Grafana stores its local database on an ephemeral volume and reloads the dashboard and data source after restart. Save dashboard changes in the repository.
 
 Monitoring uses namespace-scoped read-only pod discovery. It does not install cluster-wide operators or change the model release. Services are ClusterIP, and the dashboard command forwards Grafana to loopback. Grafana requires authentication. Credentials are generated once, stored in a Helm-managed Secret and saved locally with mode 0600. Treat the generated Helm values and work directory as secret material.
 

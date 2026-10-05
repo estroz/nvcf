@@ -169,7 +169,7 @@ class Monitoring:
                         time.sleep(0.2)
                 else:
                     raise RuntimeError('Monitoring port-forward did not become available.')
-                yield
+                yield proc
             finally:
                 proc.terminate()
                 try:
@@ -180,12 +180,13 @@ class Monitoring:
 
     def dashboard(self, port):
         self.recipe.bound_cluster()
-        with self.forward('grafana', port, 3000):
+        with self.forward('grafana', port, 3000) as proc:
             print('Dashboard: http://127.0.0.1:'+str(port)+'/d/llm-demo', flush=True)
             print('User: admin. Password file:', self.recipe.work/'grafana-admin-password', flush=True)
             print('Press Ctrl-C to close the tunnel.', flush=True)
             try:
                 while True:
+                    require(proc.poll() is None, 'Grafana tunnel disconnected. Rerun dashboard after restoring access.')
                     time.sleep(1)
             except KeyboardInterrupt:
                 pass

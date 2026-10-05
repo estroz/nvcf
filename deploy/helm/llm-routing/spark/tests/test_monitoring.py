@@ -210,6 +210,14 @@ class MonitoringTests(unittest.TestCase):
                         replace.assert_called_once_with('/images/test.tar.upload', '/images/test.tar')
                     unlink.assert_called_once_with('/images/test.tar.upload')
 
+    def test_dashboard_reports_a_lost_tunnel(self):
+        import contextlib
+        proc = Mock()
+        proc.poll.return_value = 1
+        with patch.object(self.monitor, 'forward', return_value=contextlib.nullcontext(proc)):
+            with self.assertRaisesRegex(RuntimeError, 'Grafana tunnel disconnected'):
+                self.monitor.dashboard(13000)
+
     def test_traffic_verification_requires_both_token_modes_and_dashboard(self):
         import contextlib
         import io

@@ -64,6 +64,17 @@ class MonitoringTests(unittest.TestCase):
         self.assertIn('instance=custom-backend', selectors['backend'])
         self.assertEqual(values['nodeSelector'], {'kubernetes.io/hostname': self.config['nodes']['control']})
 
+    def test_network_policy_requires_explicit_api_hosts(self):
+        for policy in ({'enabled': True}, {'enabled': 'true'}, {'apiServerCIDRs': ['0.0.0.0/0']},
+                       {'apiServerCIDRs': ['not-an-ip/32']}, {'apiServerCIDRs': '10.0.0.1/32'}, {'unknown': True}):
+            with self.subTest(policy=policy):
+                self.config['monitoring']['networkPolicy'] = policy
+                with self.assertRaises(RuntimeError):
+                    monitoring.chart_values(self.recipe)
+        policy = {'enabled': True, 'apiServerCIDRs': ['10.0.0.1/32', 'fd00::1/128']}
+        self.config['monitoring']['networkPolicy'] = policy
+        self.assertEqual(monitoring.chart_values(self.recipe)['networkPolicy'], policy)
+
     def test_install_only_changes_monitoring_and_preserves_model_state(self):
         self.recipe.state.update(serve=True, runtimeSha256='a'*64, attachedExisting=True)
         self.output.side_effect = ['[]', '']
@@ -262,6 +273,20 @@ class MonitoringChartTests(unittest.TestCase):
     def test_disabled_chart_creates_no_resources(self):
         result = subprocess.check_output(['helm', 'template', 'disabled', str(monitoring.CHART)], text=True)
         self.assertFalse([doc for doc in yaml.safe_load_all(result) if doc])
+
+    def test_optional_egress_policy_selects_only_monitoring_and_allows_cluster_access(self):
+        self.assertFalse(any(d['kind']=='NetworkPolicy' for d in self.docs))
+        values = monitoring.chart_values(self.recipe)
+        values['networkPolicy'] = {'enabled': True, 'apiServerCIDRs': ['10.0.0.1/32']}
+        path = self.recipe.work/'restricted.json'
+        path.write_text(json.dumps(values))
+        rendered = subprocess.check_output(['helm', 'template', 'restricted', str(monitoring.CHART), '-f', str(path)], text=True)
+        policy = next(d for d in yaml.safe_load_all(rendered) if d and d['kind']=='NetworkPolicy')['spec']
+        self.assertEqual(policy['podSelector'], {'matchLabels': {'app.kubernetes.io/instance': 'restricted'}})
+        self.assertEqual(policy['policyTypes'], ['Egress'])
+        self.assertEqual(policy['egress'], [{'to': [{'namespaceSelector': {}}]},
+                         {'to': [{'ipBlock': {'cidr': '10.0.0.1/32'}}],
+                          'ports': [{'protocol': 'TCP', 'port': 443}, {'protocol': 'TCP', 'port': 6443}]}])
 
     def test_scrapes_select_actual_rendered_workloads_once(self):
         values = monitoring.chart_values(self.recipe)

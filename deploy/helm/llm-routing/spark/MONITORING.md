@@ -48,6 +48,7 @@ The recipe accepts these optional `monitoring` settings:
 | `storageSize` | `5Gi` | Initial metrics PVC size |
 | `namespaces` | Installation namespace | Existing namespaces to discover and grant pod-read access in |
 | `extraTargets` | `[]` | Additional runtime or relay metric targets |
+| `networkPolicy` | Disabled | Restrict monitoring pod egress to cluster pods and explicit API server hosts |
 
 Image pins and default resources are defined in `charts/monitoring/values.yaml`, a JSON-formatted YAML file shared with the Python runner. Image overrides must use explicit version tags or digests. The Docker archive helpers require version tags. The runner reuses the installation's storage class and control node placement.
 
@@ -84,6 +85,8 @@ python3 spark.py monitoring
 The importer checks the configured image tags and archive checksum before importing. Monitoring imports allow archives below 2 GiB and reserve a 2 GiB upload volume plus a 2 GiB download volume. Application-only imports retain their 1 GiB limit. It uses the image-loader's Python and K3s helper images, which must already be available for an offline import. Alternatively preload images through the cluster's normal runtime tooling. Set `monitoring.imagePullPolicy` to `Never` for an offline startup test. The monitoring chart is local and has no downloadable Helm dependencies. Grafana update checks and automatic plugin preinstallation are disabled.
 
 Review the external artifact terms in [NOTICE](NOTICE), including Grafana OSS's AGPL-3.0 license, before distributing image bundles.
+
+For an isolated offline check, set `monitoring.networkPolicy.enabled=true` and supply `monitoring.networkPolicy.apiServerCIDRs` with the Kubernetes API Service and endpoint IPs as `/32` or `/128` host CIDRs. The policy selects only this monitoring release and permits cluster pod traffic, including DNS, plus API access on TCP 443/6443. It requires a network plugin that enforces egress policies. Confirm a previously reachable external endpoint becomes unreachable, then restart monitoring with pull policy `Never` and repeat verification. Other policies can add allowed egress, so inspect them too. This verifies monitoring pod startup with external egress blocked, not a disconnected-node boot or model download.
 
 ## Verification
 

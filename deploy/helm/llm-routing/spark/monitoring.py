@@ -4,6 +4,7 @@
 import base64
 import contextlib
 import copy
+import ipaddress
 import json
 import pathlib
 import re
@@ -29,7 +30,7 @@ def settings(config):
     options = config.get('monitoring', {})
     require(isinstance(options, dict), 'monitoring must be an object.')
     require(isinstance(options.get('enabled', False), bool), 'monitoring.enabled must be boolean.')
-    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets'}
+    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy'}
     require(not set(options) - allowed, 'Unknown monitoring setting: ' + ', '.join(sorted(set(options) - allowed)))
     return options
 
@@ -49,6 +50,20 @@ def chart_values(recipe):
             'monitoring.namespaces must list explicit Kubernetes namespace names.')
     require(recipe.c['namespace'] in namespaces, 'monitoring.namespaces must include the installation namespace.')
     values['namespaces'] = sorted(set(namespaces))
+    policy = options.get('networkPolicy', {})
+    require(isinstance(policy, dict) and set(policy) <= {'enabled', 'apiServerCIDRs'}, 'Invalid monitoring networkPolicy.')
+    values['networkPolicy'].update(policy)
+    policy = values['networkPolicy']
+    require(isinstance(policy['enabled'], bool), 'networkPolicy.enabled must be boolean.')
+    require(isinstance(policy['apiServerCIDRs'], list), 'networkPolicy.apiServerCIDRs must be a list.')
+    for cidr in policy['apiServerCIDRs']:
+        require(isinstance(cidr, str) and '/' in cidr, 'Use explicit API server host CIDRs.')
+        try:
+            network = ipaddress.ip_network(cidr)
+        except ValueError:
+            raise RuntimeError('Invalid API server host CIDR.') from None
+        require(network.prefixlen == network.max_prefixlen, 'Use /32 or /128 API server host CIDRs.')
+    require(not policy['enabled'] or policy['apiServerCIDRs'], 'Restricted monitoring needs API server host CIDRs.')
     images = options.get('images', {})
     require(isinstance(images, dict) and not set(images) - {'collector', 'victoriaMetrics', 'grafana'}, 'Unknown monitoring image component.')
     for component, image in images.items():

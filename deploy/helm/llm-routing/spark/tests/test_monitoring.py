@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, mock_open, patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
@@ -167,6 +167,37 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual(values['nodeNames'], [self.config['nodes']['control']])
         self.assertEqual(values['archiveSizeLimit'], '2Gi')
         self.assertEqual(len(values['archiveSha256']), 64)
+
+    def test_remote_upload_accepts_monitoring_size_and_rejects_excess_or_corruption(self):
+        import ast
+        tree = ast.parse((HERE/'spark.py').read_text())
+        upload = next(node.value.value for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == 'upload' for t in node.targets))
+        archive_size = 1536 * 1024**2
+        for received, digest, error in [(archive_size, 'valid', None),
+                                        (archive_size + 1, 'valid', 'exceeds'),
+                                        (archive_size - 1, 'valid', 'differs'),
+                                        (archive_size, 'corrupt', 'differs')]:
+            with self.subTest(received=received, digest=digest):
+                chunk = MagicMock()
+                chunk.__len__.return_value = received
+                stdin = Mock()
+                stdin.buffer.read.side_effect = [chunk, b'']
+                checksum = Mock()
+                checksum.hexdigest.return_value = digest
+                with patch('sys.argv', ['upload', '/images/test.tar', 'valid', str(archive_size)]), \
+                     patch('sys.stdin', stdin), patch('builtins.open', mock_open()), \
+                     patch('hashlib.sha256', return_value=checksum), patch('os.chmod'), \
+                     patch('os.path.exists', return_value=True), patch('os.unlink') as unlink, \
+                     patch('os.replace') as replace:
+                    if error:
+                        with self.assertRaisesRegex(RuntimeError, error):
+                            exec(upload, {})
+                        replace.assert_not_called()
+                    else:
+                        exec(upload, {})
+                        replace.assert_called_once_with('/images/test.tar.upload', '/images/test.tar')
+                    unlink.assert_called_once_with('/images/test.tar.upload')
 
     def test_traffic_verification_requires_both_token_modes_and_dashboard(self):
         import contextlib

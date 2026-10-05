@@ -874,7 +874,7 @@ try:
         os.chmod(partial, 0o600)
         while chunk := sys.stdin.buffer.read(1024 * 1024):
             size += len(chunk)
-            if size > expected_size or size >= 1024**3:
+            if size > expected_size:
                 raise RuntimeError('Uploaded archive exceeds its expected size')
             checksum.update(chunk)
             target.write(chunk)

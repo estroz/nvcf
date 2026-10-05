@@ -48,6 +48,15 @@ Build and distribute `gateway`, `router`, `pylon` and `operator` using the [imag
 
 Set `runtimeImage` in the configuration if using a mirror of the pinned CUDA image.
 
+New configurations enable [demo monitoring](spark/MONITORING.md). When using local image import, preload its three images before `stack`:
+
+```bash
+python3 spark.py export-monitoring-images
+python3 spark.py import-monitoring-images --allow-containerd-import
+```
+
+Registry-backed installations pull the pinned images automatically. Set `monitoring.enabled=false` to install only the routing and model components.
+
 ### Deploy in order
 
 The reference GPU environment uses NVIDIA driver `580.178.04` and CUDA 13. Run preflight qualification after changing these versions.
@@ -130,6 +139,17 @@ python3 spark.py verify-gateway
 Checks GLM answers, streaming, authentication, discovery and registration. Results are saved in `evidence/gateway.json` under the local work directory.
 
 If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key`.
+
+## Monitoring
+
+The demo configuration installs OpenTelemetry Collector, VictoriaMetrics and Grafana on the control node. After registering GLM, wait for two 15-second scrapes, then verify collection and open the dashboard:
+
+```bash
+python3 spark.py verify-monitoring --verify-traffic
+python3 spark.py dashboard --port 13000
+```
+
+The traffic check sends real GLM requests and checks request, first-token and streaming/nonstreaming token counters. Grafana uses the `admin` account and the private `grafana-admin-password` file in the work directory. See [monitoring configuration and existing installations](spark/MONITORING.md).
 
 ## Maintenance
 
@@ -229,6 +249,7 @@ Both model persistent volume claims (PVCs) remain after uninstall.
 From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks.
 
 ```bash
+python3 -m pip install -r tests/requirements-monitoring.txt
 python3 -m unittest discover -s tests -v
 python3 -m unittest discover -s charts/gguf-backend/tests -v
 python3 spark.py render

@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+K3S_VERSION='v1.36.4+k3s1'
+INSTALLER_COMMIT='4dedb15be78017a8ddd5b9e81acd44f3481078ed'
+INSTALLER_SHA256='46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad'
+
+usage() {
+  cat <<'HELP'
+Usage:
+  spark-k3s inspect
+  spark-k3s init --node-name NAME --node-ip IPv4 --interface NIC [--apply]
+  spark-k3s join --node-name NAME --node-ip IPv4 --interface NIC \
+    --server-ip IPv4 --token-file FILE [--apply]
+  spark-k3s verify --kubeconfig FILE --context NAME --nodes NAME,NAME,NAME
+
+init/join print a plan by default. --apply installs a new k3s server on this
+host and requires root. Existing k3s installations are refused.
+inspect and verify are read-only. verify requires kubectl and jq.
+See docs/dev/spark-cluster/README.md for networking, GPU setup and firmware.
+HELP
+}
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || fail "Install $1 before continuing."; }
+valid_name() { [[ "$1" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#1} -le 63 ]]; }
+valid_ip() {
+  local octets octet
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r -a octets <<< "$1"
+  for octet in "${octets[@]}"; do
+    [[ ${#octet} -le 3 && ( ${#octet} == 1 || $octet != 0* ) ]] || return 1
+    ((10#$octet <= 255)) || return 1
+  done
+  ((10#${octets[0]} > 0 && 10#${octets[0]} < 224 && 10#${octets[0]} != 127))
+}
+inspect_host() {
+  printf 'Architecture: '; uname -m
+  printf 'Kernel: '; uname -r
+  for field in sys_vendor product_name bios_version bios_date; do
+    if [[ -r /sys/class/dmi/id/$field ]]; then
+      printf '%s: ' "$field"; cat "/sys/class/dmi/id/$field"
+    fi
+  done
+  if command -v dpkg-query >/dev/null; then
+    dpkg-query -W dgx-release nvidia-container-toolkit 2>/dev/null || true
+  fi
+  if command -v nvidia-smi >/dev/null; then
+    nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+  else
+    printf 'NVIDIA driver: not available\n'
+  fi
+  if command -v k3s >/dev/null; then k3s --version; fi
+  for field in /sys/class/infiniband/*/fw_ver; do
+    [[ -r "$field" ]] || continue
+    printf '%s: ' "$field"; cat "$field"
+  done
+  if command -v rdma >/dev/null; then rdma link show; fi
+}
+require_clean_host() {
+  local path
+  for path in /etc/rancher/k3s /var/lib/rancher/k3s /etc/systemd/system/k3s.service /etc/systemd/system/k3s-agent.service; do
+    [[ ! -e "$path" && ! -L "$path" ]] || fail "Existing k3s state at $path. Use the existing cluster or its maintenance procedure."
+  done
+  if command -v k3s >/dev/null; then fail 'k3s is already installed. This helper does not upgrade or rebuild it.'; fi
+}
+require_host() {
+  [[ $(uname -s) == Linux && $(uname -m) == aarch64 ]] || fail 'Apply requires an ARM64 Linux Spark.'
+  [[ $(id -u) == 0 ]] || fail 'Run the reviewed command with sudo and --apply.'
+  local command
+  for command in ip jq nvidia-smi nvidia-container-runtime systemctl curl sha256sum; do need "$command"; done
+  nvidia-smi --query-gpu=name --format=csv,noheader | grep -q GB10 || fail 'A working GB10 driver is required. See the firmware guide.'
+  [[ -d /run/systemd/system ]] || fail 'A running systemd host is required.'
+  ip -j -4 address show dev "$IFACE" | jq -e --arg ip "$NODE_IP" 'any(.[].addr_info[]; .local == $ip)' >/dev/null ||
+    fail 'The selected IPv4 address is not assigned to the selected interface. Configure stable management networking first.'
+}
+server_args() {
+  ARGS=(server --node-name "$NODE_NAME" --node-ip "$NODE_IP" --flannel-iface "$IFACE"
+    --tls-san "$NODE_IP" --write-kubeconfig-mode 600)
+  if [[ "$ACTION" == init ]]; then
+    ARGS+=(--cluster-init)
+  else
+    ARGS+=(--server "https://$SERVER_IP:6443" --token-file /etc/rancher/k3s/join-token)
+  fi
+}
+check_token_file() {
+  [[ -f "$TOKEN_FILE" && ! -L "$TOKEN_FILE" && -s "$TOKEN_FILE" ]] || fail 'Provide a nonempty regular token file.'
+  local mode
+  mode=$(stat -c '%a' "$TOKEN_FILE")
+  [[ "$mode" == 600 || "$mode" == 400 ]] || fail 'Token file permissions must be 600 or 400.'
+  grep -q '^K10[[:xdigit:]]\{64\}::server:' "$TOKEN_FILE" ||
+    fail 'Use the secure server token from the first server node-token file, not an agent token or short token.'
+}
+install_server() (
+  require_host
+  require_clean_host
+  if [[ "$ACTION" == join ]]; then
+    [[ "$SERVER_IP" != "$NODE_IP" ]] || fail 'The join target must be another server.'
+    check_token_file
+  fi
+  local installer
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  printf 'Downloading pinned k3s installer (%s).\n' "$K3S_VERSION"
+  curl --fail --show-error --silent --location --connect-timeout 15 --max-time 120 \
+    "https://raw.githubusercontent.com/k3s-io/k3s/$INSTALLER_COMMIT/install.sh" -o "$installer"
+  printf '%s  %s\n' "$INSTALLER_SHA256" "$installer" | sha256sum -c - || fail 'Installer checksum mismatch. Nothing installed.'
+  if [[ "$ACTION" == join ]]; then
+    install -d -m 700 /etc/rancher/k3s
+    install -m 600 "$TOKEN_FILE" /etc/rancher/k3s/join-token
+  fi
+  # Reject inherited K3S_/INSTALL_K3S_ settings so they cannot change the plan.
+  local setting pinned_version="$K3S_VERSION"
+  while IFS= read -r setting; do
+    case "$setting" in K3S_*|INSTALL_K3S_*) unset "$setting" ;; esac
+  done < <(compgen -e)
+  if ! env INSTALL_K3S_VERSION="$pinned_version" sh "$installer" "${ARGS[@]}"; then
+    fail 'Installation failed. Inspect sudo journalctl -u k3s and existing state before retrying. No automatic rollback ran.'
+  fi
+  printf 'Installed. Inspect: sudo journalctl -u k3s --no-pager -n 60\n'
+  printf 'Then follow the README cluster checks. Installation alone does not prove Ready or GPU availability.\n'
+)
+verify_cluster() {
+  need kubectl
+  need jq
+  [[ -r "$KUBE_FILE" ]] || fail 'Kubeconfig is unreadable. Use an authorized local copy or sudo on a server.'
+  local nodes runtime expected count
+  expected=$(printf '%s' "$NODE_LIST" | jq -Rc 'split(",") | sort')
+  count=$(jq 'length' <<< "$expected")
+  [[ "$count" -ge 3 && $((count % 2)) == 1 ]] || fail 'This HA recipe requires an odd number of servers, at least three.'
+  [[ $(jq 'unique | length' <<< "$expected") == "$count" ]] || fail 'Expected node names must be unique.'
+  local -a kube=(kubectl --kubeconfig "$KUBE_FILE" --context "$CONTEXT" --request-timeout=30s)
+  nodes=$("${kube[@]}" get nodes -o json) || fail 'Cannot read nodes. Check the kubeconfig, context, API reachability and credentials.'
+  jq -r '.items[] | [.metadata.name, .status.nodeInfo.kubeletVersion, ([.status.conditions[] | select(.type=="Ready") | .status][0] // "Unknown"), (.status.allocatable["nvidia.com/gpu"] // "0")] | @tsv' <<< "$nodes"
+  jq -e --argjson expected "$expected" --arg version "$K3S_VERSION" '
+    ([.items[].metadata.name] | sort) == $expected and
+    all(.items[];
+      any(.status.conditions[]; .type == "Ready" and .status == "True") and
+      (.metadata.labels | has("node-role.kubernetes.io/control-plane")) and
+      (.metadata.labels | has("node-role.kubernetes.io/etcd")) and
+      .status.nodeInfo.kubeletVersion == $version and
+      .status.nodeInfo.architecture == "arm64" and
+      .status.capacity["nvidia.com/gpu"] == "1" and
+      .status.allocatable["nvidia.com/gpu"] == "1")
+  ' <<< "$nodes" >/dev/null || fail 'Expected exact membership, Ready ARM64 etcd servers, pinned k3s, and one GPU per node. Check node status and device-plugin logs.'
+  runtime=$("${kube[@]}" get runtimeclass nvidia -o json) || fail 'RuntimeClass nvidia is missing. Check NVIDIA runtime discovery on each host.'
+  jq -e '.handler == "nvidia"' <<< "$runtime" >/dev/null || fail 'RuntimeClass nvidia has an unexpected handler.'
+  printf 'PASS: expected servers are Ready with GPU capacity and RuntimeClass nvidia.\n'
+  printf 'Read-only check: GPU allocation, CUDA, cross-node pod traffic and NCCL were not exercised.\n'
+}
+main() {
+  ACTION=${1:-help}
+  [[ $# == 0 ]] || shift
+  APPLY=0 NODE_NAME='' NODE_IP='' IFACE='' SERVER_IP='' TOKEN_FILE='' KUBE_FILE='' CONTEXT='' NODE_LIST=''
+  case "$ACTION" in help|-h|--help) usage; return ;; inspect|init|join|verify) ;; *) fail "Unknown command: $ACTION" ;; esac
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --apply) APPLY=1; shift; continue ;;
+      --node-name|--node-ip|--interface|--server-ip|--token-file|--kubeconfig|--context|--nodes)
+        [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "Missing value for $1"
+        case "$1" in
+          --node-name) NODE_NAME=$2 ;; --node-ip) NODE_IP=$2 ;; --interface) IFACE=$2 ;;
+          --server-ip) SERVER_IP=$2 ;; --token-file) TOKEN_FILE=$2 ;;
+          --kubeconfig) KUBE_FILE=$2 ;; --context) CONTEXT=$2 ;; --nodes) NODE_LIST=$2 ;;
+        esac
+        shift 2 ;;
+      *) fail "Unknown option: $1" ;;
+    esac
+  done
+  case "$ACTION" in
+    inspect)
+      [[ "$APPLY$NODE_NAME$NODE_IP$IFACE$SERVER_IP$TOKEN_FILE$KUBE_FILE$CONTEXT$NODE_LIST" == 0 ]] || fail 'inspect takes no options.'
+      inspect_host ;;
+    verify)
+      [[ "$APPLY$NODE_NAME$NODE_IP$IFACE$SERVER_IP$TOKEN_FILE" == 0 ]] || fail 'verify accepts only --kubeconfig, --context and --nodes.'
+      [[ -n "$KUBE_FILE" && -n "$CONTEXT" && -n "$NODE_LIST" ]] || fail 'verify requires --kubeconfig, --context and --nodes.'
+      verify_cluster ;;
+    init|join)
+      [[ -z "$KUBE_FILE$CONTEXT$NODE_LIST" ]] || fail 'Use verify for cluster inspection options.'
+      valid_name "$NODE_NAME" || fail 'Use a lowercase DNS-label node name, up to 63 characters.'
+      valid_ip "$NODE_IP" || fail 'Use a management IPv4 address without a CIDR suffix.'
+      [[ "$IFACE" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$ ]] || fail 'Specify the management interface.'
+      if [[ "$ACTION" == join ]]; then
+        valid_ip "$SERVER_IP" || fail 'join requires --server-ip with a management IPv4 address.'
+        [[ -n "$TOKEN_FILE" ]] || fail 'join requires --token-file.'
+      else
+        [[ -z "$SERVER_IP$TOKEN_FILE" ]] || fail 'init does not accept join options.'
+      fi
+      server_args
+      printf 'Plan: k3s %s on %s (%s), management interface %s.\n' "$K3S_VERSION" "$NODE_NAME" "$NODE_IP" "$IFACE"
+      printf 'Server arguments:'; printf ' %q' "${ARGS[@]}"; printf '\n'
+      if [[ "$APPLY" == 1 ]]; then install_server; else printf 'Preview only. Re-run on the target Spark with sudo and --apply to install.\n'; fi ;;
+  esac
+}
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then main "$@"; fi

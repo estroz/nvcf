@@ -1,0 +1,9 @@
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# All nodes in this dedicated cluster are GB10 Sparks. No NFD labels are needed.
+runtimeClassName: nvidia
+failOnInitError: true
+affinity: null
+nodeSelector:
+  kubernetes.io/arch: arm64
+  node-role.kubernetes.io/control-plane: "true"

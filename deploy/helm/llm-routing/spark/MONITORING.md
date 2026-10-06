@@ -35,6 +35,36 @@ Wait for two 15-second scrapes before verification. The monitoring command chang
 
 Grafana opens at `http://127.0.0.1:13000/d/llm-demo`. Sign in as `admin` with the password in the work directory's `grafana-admin-password` file. Keep the dashboard command running while browsing. Press Ctrl-C to close its tunnel.
 
+## Uninstall
+
+For a full demo teardown, remove monitoring after the image importer and before the operator. Match these default K3s example names to your saved configuration, including any `releases` overrides. The block stops on a failure and keeps the operator running until endpoint cleanup finishes.
+
+```bash
+(
+  set -e
+  context=spark-demo
+  namespace=llm-spark-poc
+  prefix=llm-poc
+
+  helm --kube-context "$context" -n "$namespace" uninstall "${prefix}-glm" --wait --timeout 3m
+  kubectl --context "$context" -n "$namespace" wait --for=delete inferenceendpoint/glm53-iq2 --timeout=60s
+  kubectl --context "$context" -n "$namespace" wait --for=delete deployment/pylon-glm53-iq2 --timeout=90s
+  for release in "${prefix}-glm-chain" "${prefix}-images" "${prefix}-monitoring" "${prefix}-operator" "${prefix}-stack"; do
+    helm --kube-context "$context" -n "$namespace" uninstall "$release" --wait --timeout 3m
+  done
+)
+```
+
+To remove monitoring alone, use the matching context, namespace and release name:
+
+```bash
+helm --kube-context spark-demo -n llm-spark-poc uninstall llm-poc-monitoring --wait --timeout 3m
+```
+
+The model/artifact, RPC-cache and metrics PVCs retain downloaded models and recorded metrics. The namespace, InferenceEndpoint CRD, CA Secret and operator credential remain. Keep the local configuration and credentials for reuse.
+
+For routing reinstall, follow the [deployment branch's reinstall steps](https://github.com/estroz/nvcf/blob/feat/spark-llm-deployment/deploy/helm/llm-routing/README.md#uninstall): `init`, `render`, `inventory`, then the normal sequence starting at `preflight`. Follow [Install](#install) to restore monitoring.
+
 ## Configuration
 
 The recipe accepts these optional `monitoring` settings:
@@ -64,7 +94,7 @@ Each extra target requires a unique `name`, Kubernetes label `selector` and name
 
 The installed Pylon Operator must already watch any additional recipe namespace. Monitoring does not change its watch configuration. If the topology includes a separate Stargate Kubernetes relay, add its metrics target too.
 
-Setting `enabled=false` stops future installation through the recipe. It does not uninstall an existing monitoring release. Uninstall and PVC cleanup are separate operator actions. The metrics PVC is retained by Helm, and model volumes belong to their own release.
+Setting `enabled=false` stops future installation through the recipe. Use [Uninstall](#uninstall) to remove the existing release while keeping its metrics PVC.
 
 ## Offline images
 

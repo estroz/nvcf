@@ -220,7 +220,12 @@ class Monitoring:
                 selector = '{monitoring_release="'+self.release+'",model="GLM-5.3-UD-IQ2_M"}'
                 expressions = {
                     'requests': 'sum(llm_api_gateway_http_requests_total'+selector+')',
+                    'durationCount': 'sum(llm_api_gateway_http_request_duration_seconds_count'+selector+')',
+                    'durationSeconds': 'sum(llm_api_gateway_http_request_duration_seconds_sum'+selector+')',
                     'firstToken': 'sum(llm_api_gateway_stream_first_token_seconds_count'+selector+')',
+                    'firstTokenSeconds': 'sum(llm_api_gateway_stream_first_token_seconds_sum'+selector+')',
+                    'streamPromptTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="prompt",stream="true"})',
+                    'nonstreamPromptTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="prompt",stream="false"})',
                     'streamTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="completion",stream="true"})',
                     'nonstreamTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="completion",stream="false"})'}
                 def counters():
@@ -232,7 +237,7 @@ class Monitoring:
                     after = counters()
                     if all(after[name] > before[name] for name in expressions):
                         break
-                    require(time.monotonic() < deadline, 'Gateway request, TTFT or streaming/nonstreaming token metrics did not increase: '+json.dumps({'before': before, 'after': after}))
+                    require(time.monotonic() < deadline, 'Gateway request, response-duration, TTFT or prompt/completion token metrics did not increase: '+json.dumps({'before': before, 'after': after}))
                     time.sleep(2)
                 report['traffic'] = {'before': before, 'after': after}
         password = (r.work/'grafana-admin-password').read_text().strip()

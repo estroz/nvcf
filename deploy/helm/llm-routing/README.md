@@ -31,7 +31,7 @@ Use your existing kubeconfig.
    python3 spark.py init
    ```
 
-   Review the selected nodes and generated configuration. `init` configures idle GPUs, storage and image preload for K3s. Configuration and evidence are saved automatically in a private work directory outside the checkout. For another container runtime, edit an external copy of [config.example.json](spark/config.example.json) and pass `--config /path/to/config.json` instead of running `init`.
+   Review the selected nodes and generated configuration. `init` discovers idle GPUs, storage and image preload settings for K3s. The configuration is saved at the printed path in a private work directory.
 
 2. Render the manifests and inventory the cluster.
 
@@ -40,26 +40,15 @@ Use your existing kubeconfig.
    python3 spark.py inventory
    ```
 
-Check the rendered manifests and cluster inventory before deploying.
+`render` lints the Helm charts and generates manifests. `inventory` checks node readiness, GPU availability and cluster prerequisites. Continue after both commands pass.
 
 ### Build and distribute the application images
 
 Build and distribute `gateway`, `router`, `pylon` and `operator` using the [image build guide](spark/BUILDING.md).
 
-Set `runtimeImage` in the configuration if using a mirror of the pinned CUDA image.
-
-New configurations enable [demo monitoring](spark/MONITORING.md). When using local image import, preload its three images before `stack`:
-
-```bash
-python3 spark.py export-monitoring-images
-python3 spark.py import-monitoring-images --allow-containerd-import
-```
-
-Registry-backed installations pull the pinned images automatically. Set `monitoring.enabled=false` to install only the routing and model components.
+New configurations also enable [demo monitoring](spark/MONITORING.md). For local image imports, [preload monitoring images](spark/MONITORING.md#offline-images) before `stack`. Set `monitoring.enabled=false` to skip it.
 
 ### Deploy in order
-
-The reference GPU environment uses NVIDIA driver `580.178.04` and CUDA 13. Run preflight qualification after changing these versions.
 
 Run each command in order and continue after it succeeds.
 
@@ -75,37 +64,21 @@ python3 spark.py register
 python3 spark.py verify-gateway
 ```
 
-1. `preflight`: Check GPU calculations and available memory on both model nodes.
-2. `stack`: Install the gateway, router and Pylon Operator.
+1. `preflight`: Check GPU calculations and available memory on both model nodes. The reference GPU environment uses NVIDIA driver `580.178.04` and CUDA 13. Rerun `preflight` and `qualify` after changing these versions.
+2. `stack`: Install the gateway, router and Pylon Operator. This generates the default caller API key and self-signed certificates. To supply your own, complete [Optional configuration](#optional-configuration) before running `stack`.
 3. `build-runtime`: Build llama.cpp with CUDA and remote procedure call (RPC) support.
-4. `qualify`: Test calculations and data transfer across both GPUs.
+4. `qualify`: Test calculations and data transfer across both GPUs. (After fixing a failed qualification Job, run `python3 spark.py qualify --retry`.)
 5. `download`: Download the six GLM files and verify their sizes and SHA256 checksums. See the [model and runtime licenses](spark/NOTICE).
 6. `load`: Load GLM across both GPUs and wait for the model server.
 7. `verify-direct`: Test model answers and streaming directly.
 8. `register`: Register GLM with Pylon and wait for readiness.
-9. `verify-gateway`: Test GLM through the gateway, including authentication and discovery.
-
-Use [the recovery workflow](#recovery-and-limits) to test restarting a loaded model.
-
-After fixing a failed qualification Job, run `python3 spark.py qualify --retry`.
+9. `verify-gateway`: Test GLM answers, streaming, authentication, discovery and registration through the gateway. For failures, see [Gateway check troubleshooting](#gateway-check-failures).
 
 Pinned runtime:
 
 - Model revision: `346b3591c7f28d1a23716f97a065ecf12ec14771`, with 238,577,585,701 bytes across six GGUF shards.
 - llama.cpp revision: `f872b591121761ac7b2af18283bd99bdc092a63a`.
 - Capacity: two model nodes, equal layer split, context 2048 and one request slot.
-
-## Authentication and TLS
-
-The gateway requires an API key for inference. Model and registry reads are public.
-
-Gateway clients use HTTPS and Pylon connects to the router over verified QUIC. Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster.
-
-To use existing certificates:
-
-1. Set `tls.selfSigned.enabled=false` in the external configuration.
-2. Before `stack`, create Secrets `llm-gateway-stack-gateway-tls` and `llm-gateway-stack-router-tls` in the namespace with valid `tls.crt` and `tls.key` fields.
-3. Create the configured CA ConfigMap with a `ca.crt` field. Certificates must cover the configured service names and client address.
 
 ## Verification
 
@@ -127,29 +100,6 @@ Check the node placement, ready replicas and model endpoint status.
 python3 spark.py chat 'What is 17 multiplied by 19? Give one short sentence.'
 python3 spark.py chat 'Explain what a GPU does in two sentences.' --stream
 ```
-
-### Run the automated gateway checks
-
-The check uses local port 18443. Stop a previous port-forward if it occupies that port.
-
-```bash
-python3 spark.py verify-gateway
-```
-
-Checks GLM answers, streaming, authentication, discovery and registration. Results are saved in `evidence/gateway.json` under the local work directory.
-
-If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key`.
-
-## Monitoring
-
-The demo configuration installs OpenTelemetry Collector, VictoriaMetrics and Grafana on the control node. After registering GLM, wait for two 15-second scrapes, then verify collection and open the dashboard:
-
-```bash
-python3 spark.py verify-monitoring --verify-traffic
-python3 spark.py dashboard --port 13000
-```
-
-The traffic check sends real GLM requests and checks request, first-token and streaming/nonstreaming token counters. Grafana uses the `admin` account and the private `grafana-admin-password` file in the work directory. See [monitoring configuration and existing installations](spark/MONITORING.md).
 
 ## Maintenance
 
@@ -203,6 +153,45 @@ Add `--namespace <namespace>` to attachment when the cluster has multiple instal
 
 Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
+### Uninstall
+
+If monitoring is installed, [remove it first](spark/MONITORING.md#uninstall).
+
+Run the entire block, including parentheses, from `deploy/helm/llm-routing/spark` in the same configured terminal used for installation. The context lookup uses the recipe's normal selection. If you passed `--context`, `--config` or `--work-dir` during installation, pass the same options before `context` in the lookup below.
+
+The namespace and release names below are the default K3s recipe values. If you changed `namespace`, `releasePrefix` or `releases` in your saved configuration, replace these names to match. The model chain release is the GLM release name plus `-chain`, and the image-import release is the release prefix plus `-images`.
+
+The block skips absent releases, including the optional image importer, and stops on other failures. It keeps the operator running until endpoint cleanup finishes.
+
+```bash
+(
+  set -eu
+  context="$(python3 spark.py context)"
+  : "${context:?Context lookup returned an empty value}"
+  namespace=llm-spark-poc
+  : "${namespace:?Set the namespace from your saved configuration}"
+
+  helm --kube-context "$context" -n "$namespace" uninstall llm-poc-glm --ignore-not-found --wait --timeout 3m
+  kubectl --context "$context" -n "$namespace" wait --for=delete inferenceendpoint/glm53-iq2 --timeout=60s
+  kubectl --context "$context" -n "$namespace" wait --for=delete deployment/pylon-glm53-iq2 --timeout=90s
+  for release in llm-poc-glm-chain llm-poc-images llm-poc-operator llm-poc-stack; do
+    helm --kube-context "$context" -n "$namespace" uninstall "$release" --ignore-not-found --wait --timeout 3m
+  done
+)
+```
+
+The model/artifact and RPC-cache PVCs, downloaded models, namespace, InferenceEndpoint CRD, CA Secret and operator credential remain. Keep the local work directory and saved configuration for reuse.
+
+After uninstalling the demo releases, run these commands from the recipe directory with the same configuration and context selection used for installation:
+
+```bash
+python3 spark.py init
+python3 spark.py render
+python3 spark.py inventory
+```
+
+`init` checks that the demo is uninstalled, reuses the saved placement, image references and credentials, and archives stale progress under `before-reinit-*` in the work directory. Continue with [Deploy in order](#deploy-in-order), starting at `preflight`.
+
 ### Update the source baseline
 
 [spark/source.lock.json](spark/source.lock.json) records the baseline required by the recipe. Update it when the recipe requires newer runtime, API or chart changes.
@@ -220,7 +209,9 @@ Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
 Use `--source-dir /path/to/existing/checkout` on commands to select another checkout.
 
-## Recovery and limits
+### Recovery and limits
+
+This optional resilience check restarts the RPC worker, interrupts model service and verifies inference after recovery.
 
 1. Schedule a time when a model interruption is acceptable.
 2. Run the explicit recovery check.
@@ -230,8 +221,6 @@ Use `--source-dir /path/to/existing/checkout` on commands to select another chec
    ```
 
 3. Save and review the results from the target cluster.
-
-The recovery check restarts the RPC worker and verifies inference afterward.
 
 The tested setup took about 26 minutes for a cold load and 11 minutes for recovery with cached weights.
 
@@ -243,6 +232,52 @@ Memory and runtime limits:
 - GLM canary timing is 180 seconds for the timeout and 60 seconds for the interval.
 
 Both model persistent volume claims (PVCs) remain after uninstall.
+
+## Optional configuration
+
+### Demo monitoring
+
+After registering GLM, follow [monitoring verification](spark/MONITORING.md#verification) and [open Grafana](spark/MONITORING.md#dashboard). The guide also covers installation on an existing stack, offline images and removal.
+
+### Alternative container runtimes and external configuration
+
+For a non-K3s cluster or custom container runtime, prepare an external copy of [config.example.json](spark/config.example.json) before installation. Set the context, node placement, storage, runtime and image settings for your cluster. Use that file instead of `init`, and pass `--config /path/to/config.json` to each recipe command, starting with `render` and `inventory`.
+
+### Runtime image mirror
+
+To use a mirror of the pinned CUDA image, set `runtimeImage` in the saved configuration before running `preflight`.
+
+### API keys
+
+The gateway requires an API key for inference. Model and registry reads are public. By default, `stack` saves the caller key as `api-key` in the private work directory, and the recipe client uses it automatically.
+
+To supply your own key, set `apiKeyFile` in the saved configuration to a file containing the key before running `stack`.
+
+### TLS certificates
+
+Gateway clients use HTTPS and Pylon connects to the router over verified QUIC. Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster.
+
+To use existing certificates, complete these steps before running `stack`:
+
+1. Set `tls.selfSigned.enabled=false` in the external configuration.
+2. Create Secrets `llm-gateway-stack-gateway-tls` and `llm-gateway-stack-router-tls` in the namespace with valid `tls.crt` and `tls.key` fields.
+3. Create the configured CA ConfigMap with a `ca.crt` field. Certificates must cover the configured service names and client address.
+
+## Troubleshooting
+
+If a command fails, follow the next check and diagnostic log path printed by the CLI. Detailed tool output is saved in private `evidence/*.log` files inside the work directory. Use `python3 spark.py paths` to locate that directory.
+
+### Gateway check failures
+
+If `verify-gateway` fails, inspect its results in `evidence/gateway.json` under the local work directory. The check uses local port 18443. Stop a previous port-forward if it occupies that port.
+
+If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key`.
+
+After resolving the problem, rerun the check from the recipe directory:
+
+```bash
+python3 spark.py verify-gateway
+```
 
 ## Local validation
 

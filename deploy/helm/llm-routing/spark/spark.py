@@ -25,6 +25,7 @@ sys.path.insert(0, str(HERE))
 import gateway_access
 import cluster_setup
 import monitoring
+import console_output
 LOCK = json.loads((HERE/'source.lock.json').read_text())
 MODEL = json.loads((HERE/'model.lock.json').read_text())
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
@@ -46,11 +47,11 @@ def save(path, value):
 
 
 def run(command, **kwargs):
-    return subprocess.run([str(x) for x in command], check=True, **kwargs)
+    return console_output.run(command, **kwargs)
 
 
 def output(command, **kwargs):
-    return subprocess.check_output([str(x) for x in command], text=True, **kwargs)
+    return console_output.output(command, **kwargs)
 
 
 def validate(c):
@@ -240,7 +241,7 @@ def discover_config(context, namespace=None):
     image_prefix = images['gateway'].rsplit('/', 1)[0]
     if '/' not in image_prefix:
         image_prefix += '/attached'
-    # Reuse public deployment settings when attaching.
+    # TLS private material and existing caller/cluster key hashes are intentionally omitted.
     config = {'context': context, 'namespace': namespace, 'releasePrefix': prefix, 'clusterId': v['clusterId'],
               'releases': {'stack': stack, 'operator': operator, 'glm': glm}, 'nodes': nodes,
               'storageClass': backend['artifacts']['storageClassName'], 'runtimeClass': backend['runtimeClassName'],
@@ -275,6 +276,22 @@ class Recipe:
         self.stack = releases.get('stack', config['releasePrefix'] + '-stack')
         for name in (self.glm, self.operator, self.stack):
             require(re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', name) is not None and len(name) <= 53, 'Invalid release name.')
+
+    def reinitialize(self, config_path):
+        require(not (self.work/'temporary-gateway-key.json').exists(),
+                'A temporary gateway key still needs cleanup. No progress was reset.')
+        if self.state.get('inventory'):
+            self.bound_cluster()
+        cluster_setup.validate_reinitialization(self.c)
+        if self.state_path.exists():
+            require(json.loads(self.state_path.read_text()) == self.state,
+                    'Progress changed during inspection. Stop concurrent recipe commands and retry init.')
+            archive = pathlib.Path(tempfile.mkdtemp(prefix='before-reinit-', dir=self.work))
+            save(archive/'config.json', self.c)
+            self.state_path.rename(archive/'state.json')
+            print('Previous progress archived:', archive)
+        print('Reusing configuration:', config_path)
+        print('Run render, inventory, then preflight.')
 
     def stamp(self, phase, value=True):
         self.state.update(identity=self.identity)
@@ -402,7 +419,7 @@ class Recipe:
         run(self.kc+['get', 'storageclass', self.c['storageClass']])
         save(self.work/'evidence/inventory.json', {'nodes': nodes, 'pods': pods})
         self.stamp('inventory', {'nodes': {n['metadata']['name']: n['metadata']['uid'] for n in nodes}})
-        print('Inventory passed. Actual CUDA, memory and RPC checks are separate phases.')
+        print('Inventory passed.')
 
     def attach_existing(self):
         if self.state and not self.state.get('attachedExisting'):
@@ -420,7 +437,8 @@ class Recipe:
             for component in COMPONENTS:
                 require(live['images']['repositories'][component] == self.repository(component),
                         'Existing image repository differs: '+component)
-            # Preserve the installation owner's checkpoints and credentials during attachment.
+            # Retain installer checkpoints and credentials; attachment must not turn
+            # an installation owner into a restricted iteration-only work directory.
             print('Existing installation matches the saved setup.')
             return
         if self.state:
@@ -449,9 +467,9 @@ class Recipe:
         self.stamp('inventory', {'nodes': {n['metadata']['name']: n['metadata']['uid'] for n in nodes}})
         self.stamp('stack', {'apiKeyFile': str(key) if key else None, 'source': values.get('sparkRecipeSource')})
         self.stamp('serve')
-        print('Existing installation inspected without changing it. Run verify-gateway next.')
+        print('Existing installation inspected. Run verify-gateway next.')
         if values.get('sparkRecipeSource') != self.source_identity():
-            print('Image updates are disabled for this source revision. Use a coordinated stack installation to change gateway/router contracts.')
+            console_output.warn('Image updates are disabled for this source revision. Use a coordinated stack installation to change gateway/router contracts.')
 
     def bound_cluster(self):
         require(self.state.get('inventory'), 'Run inventory for this installation first.')
@@ -507,7 +525,7 @@ class Recipe:
                 save(evidence/(name+'.log'), output(self.kc+['logs', name], stderr=subprocess.STDOUT))
             except subprocess.CalledProcessError as error:
                 save(evidence/(name+'-log-error.txt'), error.output or str(error))
-                print('Could not retrieve logs for', name, '- saved the error with its pod status.')
+                console_output.warn('Could not retrieve logs for ' + name + '. Check the saved error and pod status.')
         values = self.backend_values('qualify')
         defaults = {'qualificationAttempt': values['qualification']['attempt'], 'chainAttempt': values['chain']['attempt']}
         for key, prefix in prefixes.items():
@@ -614,7 +632,7 @@ class Recipe:
                 'GLM resources or Helm revision changed while resuming load. Retry after the operation completes.')
         save(self.work/'evidence'/'load-resume.json', {'release': self.glm, 'revision': revision, 'resources': identities})
         self.stamp('serve')
-        print('Resumed completed GLM load without changing the deployment. Run verify-direct next.')
+        print('Resumed completed GLM load. Run verify-direct next.')
         return True
 
     def backend_phase(self, phase, retry=False):
@@ -995,14 +1013,14 @@ finally:
             path = self.work/'render'/(name+'-values.json')
             save(path, values)
             # Offline: no kube context, lookup, or API traffic. Generated TLS stays private.
-            run(['helm', 'lint', chart, '-f', path], stdout=subprocess.DEVNULL)
+            run(['helm', 'lint', chart, '-f', path])
             release = {'stack': self.stack, 'operator': self.operator, 'glm-chain': self.glm+'-chain',
                        'monitoring': self.c['releasePrefix']+'-monitoring'}.get(name, self.glm)
             save(self.work/'render'/(name+'.yaml'), output(['helm', 'template', release, chart, '-n', self.c['namespace'], '-f', path]))
-        print('Offline Helm lint/render passed for', len(renders), 'configurations. No deployment was performed.')
+        print('Helm lint/render passed for', len(renders), 'configurations.')
 
 
-def main(argv=None):
+def main(argv=None, console=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=pathlib.Path)
     parser.add_argument('--context', help='Kubernetes context; defaults to SPARK_CONTEXT, saved settings, or the sole kubeconfig context.')
@@ -1022,19 +1040,34 @@ def main(argv=None):
     parser.add_argument('--verify-traffic', action='store_true', help='Send gateway verification requests and check monitoring counter increases.')
     parser.add_argument('--retry', action='store_true', help='Archive an unsuccessful qualification and run new qualification and chain Jobs.')
     args = parser.parse_intermixed_args(argv)
+    if console:
+        console.phase = args.phase
     require(args.phase == 'chat' or (args.prompt is None and not args.stream), 'Prompt and --stream are supported only for chat.')
     require(not args.verify_traffic or args.phase == 'verify-monitoring', '--verify-traffic requires verify-monitoring.')
     require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
     try:
         context, work, config_path, config = cli_settings(args)
     except ContextSelectionError as error:
+        if console:
+            raise
         parser.exit(2, 'error: ' + str(error) + '\n')
+    action = lambda: execute(args, parser, context, work, config_path, config)
+    return console.run(args.phase, work, action) if console else action()
+
+
+def execute(args, parser, context, work, config_path, config):
     if args.phase == 'context':
         print(context)
         return
     if args.phase == 'init':
-        require(config is None and not config_path.exists() and not (work/'state.json').exists(),
-                'Configuration or deployment state already exists. Init does not overwrite an installation.')
+        if config is not None:
+            try:
+                Recipe(config, work, args.source_dir).reinitialize(config_path)
+            except cluster_setup.ClusterSetupError as error:
+                parser.exit(2, 'error: ' + str(error) + '\n')
+            return
+        require(not config_path.exists() and not (work/'state.json').exists(),
+                'Saved state is missing its configuration. Init does not overwrite an installation.')
         require(not config_path.is_relative_to(HERE.parents[3]), 'Keep generated configuration outside the checkout.')
         try:
             config = cluster_setup.discover_config(context, args.namespace)
@@ -1045,9 +1078,10 @@ def main(argv=None):
         fd = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, 'w') as file:
             file.write(json.dumps(config, indent=2) + '\n')
-        print('Configuration:', config_path)
+        print('Configuration created:', config_path)
         print('Model GPUs:', config['nodes']['leader'], 'and', config['nodes']['worker'])
         print('Routing node:', config['nodes']['control'])
+        print('Run render, inventory, then preflight.')
         return
     if args.phase == 'paths':
         source = args.source_dir.expanduser().resolve() if args.source_dir else HERE.parents[3]
@@ -1104,5 +1138,18 @@ def main(argv=None):
     elif args.phase == 'recover': recipe.recovery(args.confirm_model_interruption, args.port)
 
 
+def cli(argv=None):
+    console = console_output.Console()
+    try:
+        main(argv, console=console)
+        return 0
+    except SystemExit as error:
+        if not console.log_path:
+            return error.code
+        return console.failure(error)
+    except (Exception, KeyboardInterrupt) as error:
+        return console.failure(error)
+
+
 if __name__ == '__main__':
-    main()
+    sys.exit(cli())

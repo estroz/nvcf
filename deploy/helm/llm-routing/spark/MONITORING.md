@@ -11,61 +11,68 @@ Component /metrics endpoints
 
 ## Install
 
-The example configuration and `spark.py init` enable monitoring. `spark.py stack` installs it after the routing services. Older configuration files that omit `monitoring` keep it disabled.
+Run from `deploy/helm/llm-routing/spark` with the same context/configuration selection used for installation. New configurations enable monitoring during `stack`. For an existing deployment, attach if this workstation has no saved configuration, then locate it:
 
-The three monitoring Deployments run on `nodes.control`. Default resource requests total 300 millicores and 896 MiB of memory. Memory limits total 2304 MiB. Grafana requests 512 MiB and allows up to 1 GiB for dashboard rendering. VictoriaMetrics uses a separate 5 GiB PVC. Grafana stores its local database on an ephemeral volume and reloads the dashboard and data source after restart. Save dashboard changes in the repository.
+```bash
+python3 spark.py attach-existing
+python3 spark.py paths
+```
 
-Monitoring uses namespace-scoped read-only pod discovery. It does not install cluster-wide operators or change the model release. Services are ClusterIP, and the dashboard command forwards Grafana to loopback. Grafana requires authentication. Credentials are generated once, stored in a Helm-managed Secret and saved locally with mode 0600. Treat the generated Helm values and work directory as secret material.
-
-To add monitoring to an existing installation, attach using the matching recipe, edit the saved configuration printed by `spark.py paths`, and add:
+Add this setting to the saved configuration:
 
 ```json
 "monitoring": {"enabled": true}
 ```
 
-Preload the monitoring images if the saved pull policy is `Never`, then run:
+[Preload the monitoring images](#offline-images) if the pull policy is `Never`, then install monitoring without changing the serving workloads:
 
 ```bash
 python3 spark.py monitoring
-python3 spark.py verify-monitoring
+```
+
+## Verification
+
+After GLM is registered, allow 30 seconds for collection, then run:
+
+```bash
+python3 spark.py verify-monitoring --verify-traffic
+```
+
+This checks fresh scrapes, the provisioned dashboard and metric increases from real GLM requests. Results are saved in `evidence/monitoring.json`. Omit `--verify-traffic` to check collection without sending inference requests.
+
+## Dashboard
+
+```bash
 python3 spark.py dashboard --port 13000
 ```
 
-Wait for two 15-second scrapes before verification. The monitoring command changes only its own release. Existing gateway pods are scraped directly on port 9464, including when the metrics Service port is disabled. Fresh stack installations also enable gateway and router metrics Service ports.
-
-Grafana opens at `http://127.0.0.1:13000/d/llm-demo`. Sign in as `admin` with the password in the work directory's `grafana-admin-password` file. Keep the dashboard command running while browsing. Press Ctrl-C to close its tunnel.
+Open `http://127.0.0.1:13000/d/llm-demo`. Sign in as `admin` using the work directory's `grafana-admin-password` file. Keep the command running. Ctrl-C closes the tunnel.
 
 ## Uninstall
 
-For a full demo teardown, remove monitoring after the image importer and before the operator. Match these default K3s example names to your saved configuration, including any `releases` overrides. The block stops on a failure and keeps the operator running until endpoint cleanup finishes.
+Run the whole block from the recipe directory in the same configured terminal used for installation. If you used `--context`, `--config` or `--work-dir`, pass the same options before `context` in the lookup. Replace the default namespace and release name if customized. The monitoring release name is `releasePrefix` plus `-monitoring`.
 
 ```bash
 (
-  set -e
-  context=spark-demo
+  set -eu
+  context="$(python3 spark.py context)"
+  : "${context:?Context lookup returned an empty value}"
   namespace=llm-spark-poc
-  prefix=llm-poc
+  : "${namespace:?Set the namespace from your saved configuration}"
 
-  helm --kube-context "$context" -n "$namespace" uninstall "${prefix}-glm" --wait --timeout 3m
-  kubectl --context "$context" -n "$namespace" wait --for=delete inferenceendpoint/glm53-iq2 --timeout=60s
-  kubectl --context "$context" -n "$namespace" wait --for=delete deployment/pylon-glm53-iq2 --timeout=90s
-  for release in "${prefix}-glm-chain" "${prefix}-images" "${prefix}-monitoring" "${prefix}-operator" "${prefix}-stack"; do
-    helm --kube-context "$context" -n "$namespace" uninstall "$release" --wait --timeout 3m
-  done
+  helm --kube-context "$context" -n "$namespace" uninstall llm-poc-monitoring --ignore-not-found --wait --timeout 3m
 )
 ```
 
-To remove monitoring alone, use the matching context, namespace and release name:
+This removes monitoring only, skips an absent release and stops on other failures. The metrics PVC and saved local credentials remain for reuse.
 
-```bash
-helm --kube-context spark-demo -n llm-spark-poc uninstall llm-poc-monitoring --wait --timeout 3m
-```
-
-The model/artifact, RPC-cache and metrics PVCs retain downloaded models and recorded metrics. The namespace, InferenceEndpoint CRD, CA Secret and operator credential remain. Keep the local configuration and credentials for reuse.
-
-For routing reinstall, follow the [deployment branch's reinstall steps](https://github.com/estroz/nvcf/blob/feat/spark-llm-deployment/deploy/helm/llm-routing/README.md#uninstall): `init`, `render`, `inventory`, then the normal sequence starting at `preflight`. Follow [Install](#install) to restore monitoring.
+For a full demo teardown, remove monitoring above, then follow the [routing uninstall and reinstall instructions](../README.md#uninstall). Model volumes and downloaded files remain. To restore monitoring alone, follow [Install](#install).
 
 ## Configuration
+
+The three monitoring Deployments run on `nodes.control`. Default requests total 300 millicores and 896 MiB of memory, with 2304 MiB of memory limits. Grafana requests 512 MiB and allows 1 GiB. VictoriaMetrics has a separate 5 GiB PVC. Grafana reloads its provisioned dashboard and data source after restart. Save dashboard changes in the repository.
+
+Pod discovery uses namespace-scoped read-only permissions. Services are ClusterIP. Grafana credentials are generated once, stored in a Helm-managed Secret and saved locally with mode 0600. Keep generated values and the work directory private.
 
 The recipe accepts these optional `monitoring` settings:
 
@@ -118,17 +125,13 @@ Review the external artifact terms in [NOTICE](NOTICE), including Grafana OSS's 
 
 For an isolated offline check, set `monitoring.networkPolicy.enabled=true` and supply `monitoring.networkPolicy.apiServerCIDRs` with the Kubernetes API Service and endpoint IPs as `/32` or `/128` host CIDRs. The policy selects only this monitoring release and permits cluster pod traffic, including DNS, plus API access on TCP 443/6443. It requires a network plugin that enforces egress policies. Confirm a previously reachable external endpoint becomes unreachable, then restart monitoring with pull policy `Never` and repeat verification. Other policies can add allowed egress, so inspect them too. This verifies monitoring pod startup with external egress blocked, not a disconnected-node boot or model download.
 
-## Verification
+## Verification details
 
-`verify-monitoring` checks fresh successful scrapes for every configured component and matches all running selected pods to their collected series. It also checks the provisioned Grafana dashboard. Results go to `evidence/monitoring.json`. It fails on missing components, stale samples or any failed target.
+Verification matches every running selected pod to fresh collected series and fails on missing components, stale samples or failed targets. Existing gateway pods are scraped directly on port 9464 even when the metrics Service port is disabled.
 
-```bash
-python3 spark.py verify-monitoring --verify-traffic
-```
+Traffic verification runs the gateway acceptance client and waits up to 75 seconds for per-model request counters, latency and first-token histogram counts/sums, and streaming/nonstreaming prompt/completion token counters to increase.
 
-The traffic option additionally runs the existing gateway acceptance client. It waits up to 75 seconds for the GLM request count, first-token histogram count and both streaming/nonstreaming completion-token counters to increase. Metric collection checks alone do not prove those request metrics work.
-
-For an authorized failure rehearsal, keep Grafana open while running the recipe's recovery workflow. Observe registration, tunnels, router availability and request errors during interruption and recovery. A successful monitoring render or CPU fixture does not establish a real GLM recovery or offline Spark startup.
+For an authorized failure rehearsal, keep Grafana open during the recipe's recovery workflow. Observe registration, tunnels, router availability and request errors during interruption and recovery. A successful render or CPU fixture does not establish real GLM recovery or offline Spark startup.
 
 ## Dashboard semantics
 

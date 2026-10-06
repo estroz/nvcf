@@ -218,11 +218,21 @@ class MonitoringTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Grafana tunnel disconnected'):
                 self.monitor.dashboard(13000)
 
-    def test_traffic_verification_requires_both_token_modes_and_dashboard(self):
+    def test_traffic_verification_requires_latency_and_both_token_types_in_each_mode(self):
         import contextlib
         import io
-        for has_stream_tokens in (True, False):
-            with self.subTest(has_stream_tokens=has_stream_tokens):
+        metrics = {
+            'requests': ('llm_api_gateway_http_requests_total',),
+            'durationCount': ('llm_api_gateway_http_request_duration_seconds_count',),
+            'durationSeconds': ('llm_api_gateway_http_request_duration_seconds_sum',),
+            'firstToken': ('llm_api_gateway_stream_first_token_seconds_count',),
+            'firstTokenSeconds': ('llm_api_gateway_stream_first_token_seconds_sum',),
+            'streamPromptTokens': ('llm_api_gateway_llm_tokens_total', 'token_type="prompt"', 'stream="true"'),
+            'nonstreamPromptTokens': ('llm_api_gateway_llm_tokens_total', 'token_type="prompt"', 'stream="false"'),
+            'streamTokens': ('llm_api_gateway_llm_tokens_total', 'token_type="completion"', 'stream="true"'),
+            'nonstreamTokens': ('llm_api_gateway_llm_tokens_total', 'token_type="completion"', 'stream="false"')}
+        for stalled_metric in (None, *metrics):
+            with self.subTest(stalled_metric=stalled_metric):
                 self.output.return_value = '{"items": []}'
                 self.output.side_effect = None
                 (self.recipe.work/'grafana-admin-password').write_text('private-test-password')
@@ -240,19 +250,26 @@ class MonitoringTests(unittest.TestCase):
                     if query.startswith('up{'):
                         data = [{'metric': {'component': c}, 'value': [0,'1']} for c in components]
                     else:
-                        increased = traffic_sent and (has_stream_tokens or 'stream="true"' not in query)
+                        self.assertIn('monitoring_release="'+self.monitor.release+'"', query)
+                        self.assertIn('model="GLM-5.3-UD-IQ2_M"', query)
+                        stalled = stalled_metric and all(part in query for part in metrics[stalled_metric])
+                        increased = traffic_sent and not stalled
                         data = [{'value': [0, '2' if increased else '1']}]
                     return io.StringIO(json.dumps({'status': 'success','data': {'result': data}}))
                 with patch.object(self.monitor, 'forward', side_effect=lambda *args: contextlib.nullcontext()), \
                      patch.object(monitoring.urllib.request, 'urlopen', side_effect=response), \
                      patch.object(monitoring.time, 'monotonic', side_effect=[0, 100]):
-                    if has_stream_tokens:
+                    if stalled_metric is None:
                         self.monitor.verify(18000, traffic=True)
                     else:
                         with self.assertRaisesRegex(RuntimeError, 'did not increase'):
                             self.monitor.verify(18000, traffic=True)
                 report = json.loads((self.recipe.work/'evidence/monitoring.json').read_text())
-                self.assertEqual(report['passed'], has_stream_tokens)
+                self.assertEqual(report['passed'], stalled_metric is None)
+                if stalled_metric is None:
+                    self.assertEqual(report['traffic']['before'], dict.fromkeys(metrics, 1))
+                    self.assertEqual(report['traffic']['after'], dict.fromkeys(metrics, 2))
+                    self.assertEqual(report['dashboardUid'], 'llm-demo')
                 self.assertNotIn('private-test-password', json.dumps(report))
                 self.recipe.verify.assert_called_once_with(True, 18001)
 

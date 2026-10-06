@@ -64,7 +64,7 @@ Run the whole block from the recipe directory in the same configured terminal us
 )
 ```
 
-This removes monitoring only, skips an absent release and stops on other failures. The metrics PVC and saved local credentials remain for reuse.
+This removes monitoring only, skips an absent release and stops on other failures. The metrics PVC and local work files remain. Reinstalling generates a new Grafana password.
 
 For a full demo teardown, remove monitoring above, then follow the [routing uninstall and reinstall instructions](../README.md#uninstall). Model volumes and downloaded files remain. To restore monitoring alone, follow [Install](#install).
 

@@ -45,7 +45,8 @@ class MonitoringTests(unittest.TestCase):
 
     def test_bad_config_does_not_silently_ignore_unknown_or_unsafe_values(self):
         for options in ({'enabled': 'true'}, {'enable': True}, {'images': {'grafana': 'grafana/grafana:latest'}},
-                        {'namespaces': ['*']}, {'extraTargets': [{'name': 'pylon'}]}, {'imagePullPolicy': 'Sometimes'}):
+                        {'namespaces': ['*']}, {'extraTargets': [{'name': 'pylon'}]}, {'imagePullPolicy': 'Sometimes'},
+                        {'model': ''}, {'model': ' '}, {'model': 4}, {'model': None}):
             with self.subTest(options=options):
                 self.config['monitoring'] = options
                 with self.assertRaises(RuntimeError):
@@ -54,15 +55,150 @@ class MonitoringTests(unittest.TestCase):
     def test_actual_release_names_and_images_propagate(self):
         self.recipe.stack = 'custom-stack'
         self.recipe.operator = 'custom-operator'
-        self.recipe.glm = 'custom-backend'
         self.config['monitoring'].update(images={'grafana': 'mirror.example/grafana:13.2.3'}, namespaces=[self.config['namespace'], 'other-models'])
         values = monitoring.chart_values(self.recipe)
         self.assertEqual(values['grafana']['image'], 'mirror.example/grafana:13.2.3')
         selectors = {t['name']: t['selector'] for t in values['targets']}
         self.assertIn('instance=custom-stack', selectors['gateway'])
         self.assertIn('instance=custom-operator', selectors['operator'])
-        self.assertIn('instance=custom-backend', selectors['backend'])
+        self.assertEqual(set(selectors), {'gateway', 'router', 'operator', 'pylon'})
         self.assertEqual(values['nodeSelector'], {'kubernetes.io/hostname': self.config['nodes']['control']})
+
+    def test_optional_runtime_targets_do_not_assume_a_model_or_backend(self):
+        target = {'name': 'custom-runtime', 'selector': 'app=model-engine', 'portName': 'metrics', 'runtime': 'llama.cpp'}
+        self.config['monitoring']['extraTargets'] = [target]
+        self.assertEqual(monitoring.chart_values(self.recipe)['targets'][-1], target)
+        self.config['monitoring']['extraTargets'][0]['runtime'] = 'unrecognized'
+        with self.assertRaises(RuntimeError):
+            monitoring.chart_values(self.recipe)
+
+    def test_model_discovery_is_generic_deterministic_and_preserves_ids(self):
+        client = Mock()
+        for ids, requested, expected in [(['org/zeta', 'org/alpha'], None, 'org/alpha'),
+                                          (['org/zeta', 'org/alpha'], 'org/zeta', 'org/zeta'),
+                                          (['a"b\\c\nmodel'], None, 'a"b\\c\nmodel')]:
+            with self.subTest(ids=ids, requested=requested):
+                listing = {'object': 'list', 'data': [{'id': name} for name in ids]}
+                with patch.object(monitoring, 'gateway_response', return_value=json.dumps(listing).encode()) as response:
+                    self.assertEqual(monitoring.select_model(client, requested), expected)
+                    response.assert_called_once_with(client, '/v1/models')
+        for listing, requested in [({'object': 'list', 'data': []}, None),
+                                    ({'object': 'list', 'data': [{'id': ''}]}, None),
+                                    ({'object': 'list', 'data': [{'id': 2}]}, None),
+                                    ({'object': 'list', 'data': [{'id': 'real'}]}, 'missing'),
+                                    ({'object': 'list', 'data': [{'id': 'real'}]}, ''),
+                                    ({'data': [{'id': 'real'}]}, None)]:
+            with self.subTest(listing=listing, requested=requested):
+                with patch.object(monitoring, 'gateway_response', return_value=json.dumps(listing).encode()):
+                    with self.assertRaises(RuntimeError):
+                        monitoring.select_model(client, requested)
+
+    def test_generic_chat_requests_accept_bounded_reasoning_and_length_finish(self):
+        client = Mock()
+        model = 'other-vendor/reasoning-model'
+        usage = {'prompt_tokens': 7, 'completion_tokens': 12}
+        reply = {'model': model, 'choices': [{'message': {'reasoning_content': 'Thinking'}, 'finish_reason': 'length'}], 'usage': usage}
+        events = [dict(choices=[{'delta': {'reasoning_content': 'Thinking'}, 'finish_reason': None}]),
+                  dict(choices=[{'delta': {}, 'finish_reason': 'length'}], usage=usage)]
+        for stream, body in [(False, json.dumps(reply).encode()),
+                             (True, ('\n\n'.join('data: '+json.dumps(e) for e in events)+'\n\ndata: [DONE]\n\n').encode())]:
+            with self.subTest(stream=stream):
+                with patch.object(monitoring, 'gateway_response', return_value=body) as request:
+                    record = monitoring.sample_completion(client, model, stream)
+                payload = request.call_args.args[2]
+                self.assertEqual(payload['model'], model)
+                self.assertEqual(payload['max_tokens'], 512)
+                self.assertEqual(set(payload), {'model', 'messages', 'max_tokens', 'stream'} | ({'stream_options'} if stream else set()))
+                self.assertEqual(record, {'model': model, 'stream': stream, 'status': 200, 'promptTokens': 7, 'completionTokens': 12})
+                self.assertNotIn('Thinking', json.dumps(record))
+        for invalid in [dict(reply, usage={}), dict(reply, choices=[]),
+                        dict(reply, choices=[{'message': {}, 'finish_reason': 'stop'}])]:
+            with patch.object(monitoring, 'gateway_response', return_value=json.dumps(invalid).encode()):
+                with self.assertRaises(RuntimeError):
+                    monitoring.sample_completion(client, model, False)
+        with patch.object(monitoring, 'gateway_response', return_value=b'data: {}\n'):
+            with self.assertRaisesRegex(RuntimeError, 'completion marker'):
+                monitoring.sample_completion(client, model, True)
+
+    def test_gateway_transport_uses_auth_tls_and_bounded_reads_and_closes(self):
+        client = Mock(key='private-caller-key', context=True)
+        connection = client.connect.return_value
+        response = connection.getresponse.return_value
+        response.status = 200
+        response.read1.side_effect = [b'{"object":"list"}', b'']
+        self.assertEqual(monitoring.gateway_response(client, '/v1/models'), b'{"object":"list"}')
+        self.assertEqual(connection.request.call_args.args, ('GET', '/v1/models', None, {'Authorization': 'Bearer private-caller-key'}))
+        self.assertEqual(connection.timeout, 180)
+        connection.close.assert_called_once()
+        connection.close.reset_mock()
+        response.read1.side_effect = [b'x' * 524289]
+        with self.assertRaisesRegex(RuntimeError, '512 KiB'):
+            monitoring.gateway_response(client, '/v1/models')
+        connection.close.assert_called_once()
+        response.status = 401
+        with self.assertRaisesRegex(RuntimeError, 'HTTP 401'):
+            monitoring.gateway_response(client, '/v1/models')
+        client.context = None
+        with self.assertRaisesRegex(RuntimeError, 'verified HTTPS'):
+            monitoring.gateway_response(client, '/v1/models')
+
+    def test_traffic_client_model_override_and_temporary_key_cleanup(self):
+        import contextlib
+        self.recipe.state['stack'] = {'release': self.recipe.stack}
+        self.config['monitoring']['model'] = 'configured-model'
+        self.recipe.forward = Mock(side_effect=lambda *args: contextlib.nullcontext())
+        temporary = Mock(side_effect=lambda *args: contextlib.nullcontext('private-key-file'))
+        with patch.object(monitoring.gateway_access, 'temporary_gateway_key', temporary), \
+             patch.object(monitoring, 'Client') as client_class, \
+             patch.object(monitoring, 'select_model', side_effect=lambda client, model: model) as select:
+            for override, expected in [(None, 'configured-model'), ('override-model', 'override-model')]:
+                with self.monitor.traffic_client(18001, override) as (client, selected):
+                    self.assertIs(client, client_class.return_value)
+                    self.assertEqual(selected, expected)
+                select.assert_called_with(client, expected)
+            client_class.assert_called_with('https://127.0.0.1:18001', self.recipe.work/'ca.crt', 'private-key-file')
+        temporary.assert_called_with(self.recipe, 'https://127.0.0.1:18001')
+        closed = []
+        @contextlib.contextmanager
+        def key(*args):
+            try:
+                yield 'private-key-file'
+            finally:
+                closed.append(True)
+        with patch.object(monitoring.gateway_access, 'temporary_gateway_key', side_effect=key), \
+             patch.object(monitoring, 'Client'), patch.object(monitoring, 'select_model', side_effect=RuntimeError('missing model')):
+            with self.assertRaisesRegex(RuntimeError, 'missing model'):
+                with self.monitor.traffic_client(18001):
+                    self.fail('Invalid discovery must not start traffic.')
+        self.assertEqual(closed, [True])
+
+    def test_configured_caller_key_overrides_checkpoint_without_invalid_path_fallback(self):
+        import contextlib
+        configured = self.recipe.work/'configured-caller-key'
+        configured.write_text('private-new-key')
+        self.config['apiKeyFile'] = str(configured)
+        self.recipe.state['stack'] = {'apiKeyFile': 'stale-checkpoint-key'}
+        checkpoint = copy.deepcopy(self.recipe.state)
+        self.recipe.forward = Mock(side_effect=lambda *args: contextlib.nullcontext())
+        with patch.object(monitoring.gateway_access, 'temporary_gateway_key') as temporary, \
+             patch.object(monitoring, 'Client') as client_class, \
+             patch.object(monitoring, 'select_model', return_value='available-model'):
+            with self.monitor.traffic_client(18001):
+                pass
+            client_class.assert_called_once_with('https://127.0.0.1:18001', self.recipe.work/'ca.crt', str(configured.resolve()))
+            self.assertEqual(self.recipe.state, checkpoint)
+            client_class.reset_mock()
+            self.config['apiKeyFile'] = str(self.recipe.work/'missing-caller-key')
+            with self.assertRaises(FileNotFoundError):
+                with self.monitor.traffic_client(18001):
+                    self.fail('Missing explicit credentials must not fall back to the checkpoint.')
+            self.config['apiKeyFile'] = ''
+            with self.assertRaisesRegex(RuntimeError, 'apiKeyFile'):
+                with self.monitor.traffic_client(18001):
+                    self.fail('Invalid explicit credentials must not fall back to the checkpoint.')
+            client_class.assert_not_called()
+            temporary.assert_not_called()
+        self.assertEqual(self.recipe.state, checkpoint)
 
     def test_network_policy_requires_explicit_api_hosts(self):
         for policy in ({'enabled': True}, {'enabled': 'true'}, {'apiServerCIDRs': ['0.0.0.0/0']},
@@ -290,11 +426,16 @@ class MonitoringTests(unittest.TestCase):
                 self.output.side_effect = None
                 (self.recipe.work/'grafana-admin-password').write_text('private-test-password')
                 traffic_sent = False
-                def send_traffic(*args):
+                selected = 'vendor/model"quoted\\path\nname\U0001f680'
+                client = Mock()
+                def send_traffic(_client, model, stream):
                     nonlocal traffic_sent
-                    traffic_sent = True
-                self.recipe.verify = Mock(side_effect=send_traffic)
-                components = {'gateway','router','operator','pylon','backend','monitoring-storage','monitoring-grafana','monitoring-collector'}
+                    self.assertIs(_client, client)
+                    self.assertEqual(model, selected)
+                    traffic_sent = stream
+                    return {'stream': stream, 'status': 200}
+                self.recipe.verify = Mock()
+                components = {'gateway','router','operator','pylon','monitoring-storage','monitoring-grafana','monitoring-collector'}
                 def response(request, timeout):
                     url = request if isinstance(request, str) else request.full_url
                     if '/api/dashboards/' in url:
@@ -304,12 +445,14 @@ class MonitoringTests(unittest.TestCase):
                         data = [{'metric': {'component': c}, 'value': [0,'1']} for c in components]
                     else:
                         self.assertIn('monitoring_release="'+self.monitor.release+'"', query)
-                        self.assertIn('model="GLM-5.3-UD-IQ2_M"', query)
+                        self.assertIn('model='+json.dumps(selected, ensure_ascii=False), query)
                         stalled = stalled_metric and all(part in query for part in metrics[stalled_metric])
                         increased = traffic_sent and not stalled
                         data = [{'value': [0, '2' if increased else '1']}]
                     return io.StringIO(json.dumps({'status': 'success','data': {'result': data}}))
                 with patch.object(self.monitor, 'forward', side_effect=lambda *args: contextlib.nullcontext()), \
+                     patch.object(self.monitor, 'traffic_client', side_effect=lambda *args: contextlib.nullcontext((client, selected))), \
+                     patch.object(monitoring, 'sample_completion', side_effect=send_traffic) as completion, \
                      patch.object(monitoring.urllib.request, 'urlopen', side_effect=response), \
                      patch.object(monitoring.time, 'monotonic', side_effect=[0, 0, 100]):
                     if stalled_metric is None:
@@ -322,9 +465,11 @@ class MonitoringTests(unittest.TestCase):
                 if stalled_metric is None:
                     self.assertEqual(report['traffic']['before'], dict.fromkeys(metrics, 1))
                     self.assertEqual(report['traffic']['after'], dict.fromkeys(metrics, 2))
+                    self.assertEqual(report['traffic']['model'], selected)
                     self.assertEqual(report['dashboardUid'], 'llm-demo')
                 self.assertNotIn('private-test-password', json.dumps(report))
-                self.recipe.verify.assert_called_once_with(True, 18001)
+                self.recipe.verify.assert_not_called()
+                self.assertEqual([call.args[2] for call in completion.call_args_list], [False, True])
 
     def test_enabled_stack_installs_monitoring_after_routing(self):
         calls = []
@@ -369,7 +514,7 @@ class MonitoringChartTests(unittest.TestCase):
     def test_scrapes_select_actual_rendered_workloads_once(self):
         values = monitoring.chart_values(self.recipe)
         workloads = []
-        for name in ('stack', 'operator', 'glm-serve'):
+        for name in ('stack', 'operator'):
             workloads.extend(d for d in yaml.safe_load_all((self.recipe.work/'render'/(name+'.yaml')).read_text()) if d and d['kind']=='Deployment')
         for t in values['targets']:
             if t['name']=='pylon':
@@ -391,8 +536,8 @@ class MonitoringChartTests(unittest.TestCase):
         pipeline = config['service']['pipelines']['metrics']
         self.assertEqual(pipeline['exporters'], ['prometheusremotewrite'])
         jobs = config['receivers']['prometheus']['config']['scrape_configs']
-        self.assertEqual({j['job_name'] for j in jobs}, {'gateway','router','operator','pylon','backend','monitoring-storage','monitoring-grafana','monitoring-collector'})
-        for job in jobs[:5]:
+        self.assertEqual({j['job_name'] for j in jobs}, {'gateway','router','operator','pylon','monitoring-storage','monitoring-grafana','monitoring-collector'})
+        for job in jobs[:4]:
             self.assertEqual(job['kubernetes_sd_configs'][0]['namespaces']['names'], [self.recipe.c['namespace']])
             self.assertEqual(job['relabel_configs'][1]['action'], 'keep')
         self.assertEqual(jobs[0]['relabel_configs'][2]['replacement'], '$${1}:9464')
@@ -420,13 +565,45 @@ class MonitoringChartTests(unittest.TestCase):
         self.assertEqual(datasource['uid'], 'demo-metrics')
         self.assertEqual(dashboard['uid'], 'llm-demo')
         expressions = ' '.join(t['expr'] for p in dashboard['panels'] for t in p['targets'])
-        for metric in ('stream_first_token_seconds_bucket','llm_tokens_total','pylon_reverse_tunnel_connected','nvcf_pylon_operator_registered','stargate_requests_total','requests_deferred'):
+        self.assertEqual(len(dashboard['panels']), 17)
+        for metric in ('stream_first_token_seconds_bucket','llm_tokens_total','pylon_reverse_tunnel_connected','nvcf_pylon_operator_registered','stargate_requests_total'):
             self.assertIn(metric, expressions)
+        self.assertNotIn('llamacpp', expressions)
+        self.assertNotIn('GLM', json.dumps(dashboard))
         self.assertNotIn('or vector(0)', expressions)
         self.assertIn('timestamp(up', expressions)
+        model = next(variable for variable in dashboard['templating']['list'] if variable['name'] == 'model')
+        self.assertIn('llm_api_gateway_http_requests_total|stargate_active_inference_servers', model['query'])
+        self.assertTrue(model['multi'])
+        self.assertEqual(model['current']['value'], ['$__all'])
         for panel in dashboard['panels']:
             self.assertEqual(panel['datasource']['uid'], datasource['uid'])
             self.assertEqual(panel['fieldConfig']['defaults']['noValue'], 'No data')
+
+    def test_runtime_panels_and_labels_require_explicit_supported_target(self):
+        for runtime in (None, 'llama.cpp'):
+            with self.subTest(runtime=runtime):
+                values = monitoring.chart_values(self.recipe)
+                target = {'name': 'custom-runtime', 'selector': 'app=external-backend', 'portName': 'metrics'}
+                if runtime:
+                    target['runtime'] = runtime
+                values['targets'].append(target)
+                path = self.recipe.work/'runtime-target.json'
+                path.write_text(json.dumps(values))
+                rendered = subprocess.check_output(['helm', 'template', 'optional-runtime', str(monitoring.CHART), '-f', str(path)], text=True)
+                docs = [d for d in yaml.safe_load_all(rendered) if d]
+                collector = yaml.safe_load(next(d for d in docs if d['kind'] == 'ConfigMap' and d['metadata']['name'].endswith('-collector'))['data']['config.yaml'])
+                job = next(j for j in collector['receivers']['prometheus']['config']['scrape_configs'] if j['job_name'] == target['name'])
+                labels = {rule.get('target_label'): rule.get('replacement') for rule in job['relabel_configs']}
+                self.assertEqual(labels.get('backend_runtime'), runtime)
+                self.assertNotIn('model', labels)
+                dashboard = json.loads(next(d for d in docs if d['kind'] == 'ConfigMap' and d['metadata']['name'].endswith('-grafana'))['data']['dashboard.json'])
+                self.assertEqual(len(dashboard['panels']), 20 if runtime else 17)
+                self.assertEqual(len({p['id'] for p in dashboard['panels']}), len(dashboard['panels']))
+                if runtime:
+                    for panel in dashboard['panels'][17:]:
+                        for query in panel['targets']:
+                            self.assertIn('backend_runtime="llama.cpp"', query['expr'])
 
 
 if __name__ == '__main__':

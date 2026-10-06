@@ -80,6 +80,10 @@ data:
                   target_label: inference_endpoint
                 - target_label: component
                   replacement: {{ .name | quote }}
+{{- if .runtime }}
+                - target_label: backend_runtime
+                  replacement: {{ .runtime | quote }}
+{{- end }}
                 - target_label: monitoring_release
                   replacement: {{ $.Release.Name | quote }}
 {{- end }}

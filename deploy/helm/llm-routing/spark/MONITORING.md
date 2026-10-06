@@ -1,6 +1,6 @@
 # Demo monitoring
 
-The monitoring release collects Prometheus metrics from the gateway, request router, Pylon pods, Pylon Operator and GLM backend. OpenTelemetry Collector sends the samples to local VictoriaMetrics. Grafana loads the data source and LLM routing dashboard from ConfigMaps.
+The monitoring release collects Prometheus metrics from the gateway, request router, Pylon pods and Pylon Operator. Backend exporters are optional targets. OpenTelemetry Collector sends the samples to local VictoriaMetrics. Grafana loads the data source and LLM routing dashboard from ConfigMaps.
 
 ```text
 Component /metrics endpoints
@@ -11,14 +11,14 @@ Component /metrics endpoints
 
 ## Install
 
-Run from `deploy/helm/llm-routing/spark` with the same context/configuration selection used for installation. New configurations enable monitoring during `stack`. For an existing deployment, attach if this workstation has no saved configuration, then locate it:
+Run from `deploy/helm/llm-routing/spark` with the same context/configuration selection used for installation. New configurations enable monitoring during `stack`. For an existing routing stack, discover its settings and locate the saved configuration:
 
 ```bash
-python3 spark.py attach-existing
+python3 spark.py attach-monitoring
 python3 spark.py paths
 ```
 
-Add this setting to the saved configuration:
+Fresh attachment enables monitoring. If an existing configuration disables it, set:
 
 ```json
 "monitoring": {"enabled": true}
@@ -32,13 +32,15 @@ python3 spark.py monitoring
 
 ## Verification
 
-After GLM is registered, run:
+After a model is registered, run:
 
 ```bash
 python3 spark.py verify-monitoring --verify-traffic
 ```
 
-The command waits up to 75 seconds for fresh scrapes, then checks the dashboard and metric increases from real GLM requests. Results are saved in `evidence/monitoring.json`. Omit `--verify-traffic` to check collection without sending inference requests.
+The command waits up to 75 seconds for fresh scrapes, then checks the dashboard and metric increases from real model requests. Results are saved in `evidence/monitoring.json`. Omit `--verify-traffic` to check collection only. The default is the first model ID in sorted gateway discovery. Set `monitoring.model` or pass `--model <model-id>` to select another.
+
+Set `apiKeyFile` to an existing caller-key file for traffic verification. Otherwise the command uses a temporary key with the stack-managed static-key Secret.
 
 ## Dashboard
 
@@ -79,6 +81,7 @@ The recipe accepts these optional `monitoring` settings:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `enabled` | false when omitted | Install monitoring during `stack` |
+| `model` | Gateway model discovery | Select one model for traffic verification, overridden by `--model` |
 | `imagePullPolicy` | Application pull policy | `Never`, `IfNotPresent` or `Always` |
 | `images` | Chart version pins | Overrides for `collector`, `victoriaMetrics` and `grafana` |
 | `retentionPeriod` | `3d` | VictoriaMetrics retention duration |
@@ -89,13 +92,14 @@ The recipe accepts these optional `monitoring` settings:
 
 Image pins and default resources are defined in `charts/monitoring/values.yaml`, a JSON-formatted YAML file shared with the Python runner. Image overrides must use explicit version tags or digests. The Docker archive helpers require version tags. The runner reuses the installation's storage class and control node placement.
 
-Each extra target requires a unique `name`, Kubernetes label `selector` and named container port `portName`. Optional `port` overrides the scrape port, and `path` defaults to `/metrics`. The named port selects one discovery target per pod. Add the recipe namespace to `namespaces` when it differs from the gateway namespace. For example:
+Each extra target requires a unique `name`, Kubernetes label `selector` and named container port `portName`. Optional `port` overrides the scrape port, and `path` defaults to `/metrics`. Set `runtime="llama.cpp"` only for compatible llama.cpp exporters to enable their backend panels. Other exporters can be scraped without `runtime`, with samples available in Explore and general scrape health. The named port selects one discovery target per pod. Add the recipe namespace to `namespaces` when it differs from the gateway namespace. For example:
 
 ```json
 {
-  "name": "second-backend",
-  "selector": "app.kubernetes.io/name=second-model",
-  "portName": "http"
+  "name": "model-runtime",
+  "selector": "app.kubernetes.io/name=my-model-server",
+  "portName": "http",
+  "runtime": "llama.cpp"
 }
 ```
 
@@ -119,7 +123,7 @@ python3 spark.py import-monitoring-images --archive /path/to/monitoring-arm64-im
 python3 spark.py monitoring
 ```
 
-The importer checks the configured image tags and archive checksum before importing. Monitoring imports allow archives below 2 GiB and reserve a 2 GiB upload volume plus a 2 GiB download volume. Application-only imports retain their 1 GiB limit. It uses the image-loader's Python and K3s helper images, which must already be available for an offline import. Alternatively preload images through the cluster's normal runtime tooling. Set `monitoring.imagePullPolicy` to `Never` for an offline startup test. The monitoring chart is local and has no downloadable Helm dependencies. Grafana update checks and automatic plugin preinstallation are disabled.
+The importer checks the configured image tags and archive checksum before importing. Monitoring imports allow archives below 2 GiB and reserve a 2 GiB upload volume plus a 2 GiB download volume. Application-only imports retain their 1 GiB limit. It uses the image-loader's Python and K3s helper images, which must already be available for an offline import. Attachment reuses existing importer settings when present. Otherwise configure `containerd` settings or preload images through the cluster's normal runtime tooling. Set `monitoring.imagePullPolicy` to `Never` for an offline startup test. The monitoring chart is local and has no downloadable Helm dependencies. Grafana update checks and automatic plugin preinstallation are disabled.
 
 Review the external artifact terms in [NOTICE](NOTICE), including Grafana OSS's AGPL-3.0 license, before distributing image bundles.
 
@@ -129,9 +133,9 @@ For an isolated offline check, set `monitoring.networkPolicy.enabled=true` and s
 
 Verification matches every running selected pod to fresh collected series and fails on missing components, stale samples or failed targets. Existing gateway pods are scraped directly on port 9464 even when the metrics Service port is disabled.
 
-Traffic verification runs the gateway acceptance client and waits up to 75 seconds for per-model request counters, latency and first-token histogram counts/sums, and streaming/nonstreaming prompt/completion token counters to increase.
+Traffic verification sends streaming and nonstreaming requests to the selected model. It waits up to 75 seconds for that model's request counters, latency and first-token histogram counts/sums, and prompt/completion token counters to increase. The runtime must support the gateway chat API, SSE streaming and prompt/completion token usage in both modes.
 
-For an authorized failure rehearsal, keep Grafana open during the recipe's recovery workflow. Observe registration, tunnels, router availability and request errors during interruption and recovery. A successful render or CPU fixture does not establish real GLM recovery or offline Spark startup.
+For an authorized failure rehearsal, keep Grafana open during the recipe's recovery workflow. Observe registration, tunnels, router availability and request errors during interruption and recovery. A successful render or CPU fixture does not establish real model recovery or offline Spark startup.
 
 ## Dashboard semantics
 
@@ -140,7 +144,7 @@ For an authorized failure rehearsal, keep Grafana open during the recipe's recov
 - Gateway request latency includes the response duration. Router proxy latency measures upstream first byte.
 - Registration, reverse tunnel connectivity and routability are separate signals. Operator condition panels show aggregate counts, while registration also has a namespace/name endpoint label.
 - Health panels hide samples older than 45 seconds. Missing data stays unknown. The scrape-age panel shows stopped collection separately from a failed scrape.
-- The model filter applies to model-labelled gateway/router metrics. Operator and Pylon panels retain endpoint/pod labels. Rejected requests can have no model label and remain visible in the errors panel.
-- Backend queue and generation panels use the pinned llama.cpp schema. Other engines need queries for their own exported names. Their raw metrics remain available in Grafana Explore.
+- The model filter discovers gateway/router labels and defaults to All. It applies to model-labelled gateway/router metrics. Operator and Pylon panels retain endpoint/pod labels. Rejected requests can have no model label and remain visible in the errors panel.
+- The default dashboard has 17 routing and collection panels. Three llama.cpp backend panels appear only when an extra target explicitly selects that runtime. They retain component/pod labels and are not filtered by model. Other runtime schemas require their own queries.
 
 Logs and Kubernetes Events remain available through kubectl with an explicit context. This metrics release does not provision a log or trace store.

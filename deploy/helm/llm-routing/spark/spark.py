@@ -25,6 +25,7 @@ sys.path.insert(0, str(HERE))
 import gateway_access
 import cluster_setup
 import monitoring
+import monitoring_setup
 import console_output
 LOCK = json.loads((HERE/'source.lock.json').read_text())
 MODEL = json.loads((HERE/'model.lock.json').read_text())
@@ -115,7 +116,7 @@ def cli_settings(args):
     config = None
     if args.config:
         path = args.config.expanduser()
-        require(path.exists() or args.phase == 'init', 'Configuration file does not exist. Run init or attach-existing first.')
+        require(path.exists() or args.phase in ('init', 'attach-monitoring'), 'Configuration file does not exist. Run init, attach-existing or attach-monitoring first.')
         if path.exists():
             config = json.loads(path.read_text())
     work = args.work_dir.expanduser().resolve() if args.work_dir else None
@@ -254,16 +255,18 @@ def discover_config(context, namespace=None):
 
 
 class Recipe:
-    def __init__(self, config, work, source=None):
+    def __init__(self, config, work, source=None, monitoring_only=False):
         self.c = config
-        validate(config)
         self.work = pathlib.Path(work).expanduser().resolve()
         repo = HERE.parents[3]
         require(not self.work.is_relative_to(repo), 'Keep generated work and credentials outside the checkout.')
-        self.work.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.source = pathlib.Path(source).expanduser().resolve() if source else repo
         self.state_path = self.work/'state.json'
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
+        require(monitoring_only or not self.state.get('attachedMonitoring'),
+                'This work directory is attached for monitoring. Use the deployment owner work directory for other phases.')
+        (monitoring_setup.validate if monitoring_only else validate)(config)
+        self.work.mkdir(parents=True, exist_ok=True, mode=0o700)
         identity = {k: config[k] for k in ('context', 'namespace', 'releasePrefix', 'clusterId', 'nodes')}
         identity['releases'] = config.get('releases', {})
         require(not self.state or self.state['identity'] == identity, 'Work directory belongs to a different installation.')
@@ -271,10 +274,10 @@ class Recipe:
         self.kc = ['kubectl', '--context', config['context'], '-n', config['namespace']]
         self.hm = ['helm', '--kube-context', config['context'], '-n', config['namespace']]
         releases = config.get('releases', {})
-        self.glm = releases.get('glm', config['releasePrefix'] + '-glm')
+        self.glm = None if monitoring_only else releases.get('glm', config['releasePrefix'] + '-glm')
         self.operator = releases.get('operator', config['releasePrefix'] + '-operator')
         self.stack = releases.get('stack', config['releasePrefix'] + '-stack')
-        for name in (self.glm, self.operator, self.stack):
+        for name in filter(None, (self.glm, self.operator, self.stack)):
             require(re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', name) is not None and len(name) <= 53, 'Invalid release name.')
 
     def reinitialize(self, config_path):
@@ -470,6 +473,9 @@ class Recipe:
         print('Existing installation inspected. Run verify-gateway next.')
         if values.get('sparkRecipeSource') != self.source_identity():
             console_output.warn('Image updates are disabled for this source revision. Use a coordinated stack installation to change gateway/router contracts.')
+
+    def attach_monitoring(self):
+        monitoring_setup.attach(self, output, save)
 
     def bound_cluster(self):
         require(self.state.get('inventory'), 'Run inventory for this installation first.')
@@ -1027,7 +1033,7 @@ def main(argv=None, console=None):
     parser.add_argument('--namespace', help='Select the namespace when the cluster has multiple installations.')
     parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
     parser.add_argument('--source-dir', type=pathlib.Path, help='Existing source checkout; defaults to the checkout containing this script.')
-    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover', 'monitoring', 'dashboard', 'verify-monitoring', 'monitoring-images', 'export-monitoring-images', 'import-monitoring-images'])
+    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'attach-monitoring', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover', 'monitoring', 'dashboard', 'verify-monitoring', 'monitoring-images', 'export-monitoring-images', 'import-monitoring-images'])
     parser.add_argument('prompt', nargs='?', help='Prompt for the chat command.')
     parser.add_argument('--stream', action='store_true', help='Stream the chat response.')
     parser.add_argument('--component', choices=list(COMPONENTS))
@@ -1038,12 +1044,14 @@ def main(argv=None, console=None):
     parser.add_argument('--port', type=int, default=18443)
     parser.add_argument('--confirm-model-interruption', action='store_true')
     parser.add_argument('--verify-traffic', action='store_true', help='Send gateway verification requests and check monitoring counter increases.')
+    parser.add_argument('--model', help='Served model to use with verify-monitoring --verify-traffic. Defaults to monitoring.model or gateway discovery.')
     parser.add_argument('--retry', action='store_true', help='Archive an unsuccessful qualification and run new qualification and chain Jobs.')
     args = parser.parse_intermixed_args(argv)
     if console:
         console.phase = args.phase
     require(args.phase == 'chat' or (args.prompt is None and not args.stream), 'Prompt and --stream are supported only for chat.')
     require(not args.verify_traffic or args.phase == 'verify-monitoring', '--verify-traffic requires verify-monitoring.')
+    require(args.model is None or (args.phase == 'verify-monitoring' and args.verify_traffic), '--model requires verify-monitoring --verify-traffic.')
     require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
     try:
         context, work, config_path, config = cli_settings(args)
@@ -1089,10 +1097,14 @@ def execute(args, parser, context, work, config_path, config):
         return
     discovered = config is None
     if discovered:
-        require(args.phase == 'attach-existing', 'Run attach-existing first, or provide --config for a new installation.')
+        require(args.phase in ('attach-existing', 'attach-monitoring'), 'Run attach-existing first for deployment commands, or attach-monitoring for monitoring.')
         require(not (work/'state.json').exists(), 'Saved state is missing its configuration. Use a new work directory.')
-        config = discover_config(context, args.namespace)
-    recipe = Recipe(config, work, args.source_dir)
+        require(not config_path.is_relative_to(HERE.parents[3]), 'Keep generated configuration outside the checkout.')
+        config = (monitoring_setup.discover_config(context, args.namespace, output) if args.phase == 'attach-monitoring'
+                  else discover_config(context, args.namespace))
+    monitoring_only = args.phase in ('attach-monitoring', 'monitoring', 'dashboard', 'verify-monitoring',
+                                    'monitoring-images', 'export-monitoring-images', 'import-monitoring-images', 'cleanup-key')
+    recipe = Recipe(config, work, args.source_dir, monitoring_only=monitoring_only)
     if args.phase == 'prepare': recipe.prepare()
     elif args.phase == 'render': recipe.render()
     elif args.phase == 'inventory': recipe.inventory()
@@ -1102,6 +1114,11 @@ def execute(args, parser, context, work, config_path, config):
             save(config_path, config)
             print('Discovered configuration:', config_path)
         print('Run verify-gateway next.')
+    elif args.phase == 'attach-monitoring':
+        recipe.attach_monitoring()
+        if discovered:
+            save(config_path, config)
+            print('Discovered monitoring configuration:', config_path)
     elif args.phase == 'build-images':
         try:
             recipe.build_images(args.component, args.tag)
@@ -1115,7 +1132,7 @@ def execute(args, parser, context, work, config_path, config):
         recipe.import_images(args.archive or recipe.work/'arm64-images.tar', args.allow_containerd_import, args.component, args.tag)
     elif args.phase == 'monitoring': monitoring.Monitoring(recipe, run, output, save).install()
     elif args.phase == 'dashboard': monitoring.Monitoring(recipe, run, output, save).dashboard(args.port)
-    elif args.phase == 'verify-monitoring': monitoring.Monitoring(recipe, run, output, save).verify(args.port, args.verify_traffic)
+    elif args.phase == 'verify-monitoring': monitoring.Monitoring(recipe, run, output, save).verify(args.port, args.verify_traffic, args.model)
     elif args.phase == 'monitoring-images': print('\n'.join(monitoring.image_list(recipe)))
     elif args.phase == 'export-monitoring-images':
         monitoring.Monitoring(recipe, run, output, save).export_images(args.archive or recipe.work/'monitoring-arm64-images.tar')

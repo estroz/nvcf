@@ -1,6 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 {{- if .Values.enabled }}
+{{- $dashboard := .Files.Get "files/dashboard.json" | fromJson }}
+{{- $llamaCpp := false }}
+{{- range .Values.targets }}
+{{- if eq (default "" .runtime) "llama.cpp" }}
+{{- $llamaCpp = true }}
+{{- end }}
+{{- end }}
+{{- if $llamaCpp }}
+{{- $panels := $dashboard.panels }}
+{{- range (.Files.Get "files/dashboard-llamacpp.json" | fromJsonArray) }}
+{{- $panels = append $panels . }}
+{{- end }}
+{{- $_ := set $dashboard "panels" $panels }}
+{{- end }}
 {{- if .Values.grafana.adminPassword }}
 apiVersion: v1
 kind: Secret
@@ -39,5 +53,5 @@ data:
         options:
           path: /var/lib/grafana/dashboards
   dashboard.json: |
-{{ .Files.Get "files/dashboard.json" | indent 4 }}
+{{ $dashboard | toPrettyJson | indent 4 }}
 {{- end }}

@@ -237,7 +237,7 @@ Both model persistent volume claims (PVCs) remain after uninstall.
 
 ### Demo monitoring
 
-After registering GLM, follow [monitoring verification](spark/MONITORING.md#verification) and [open Grafana](spark/MONITORING.md#dashboard). The guide also covers installation on an existing stack, offline images and removal.
+After registering a model, follow [monitoring verification](spark/MONITORING.md#verification) and [open Grafana](spark/MONITORING.md#dashboard). The guide also covers installation on an existing stack, offline images and removal.
 
 ### Alternative container runtimes and external configuration
 

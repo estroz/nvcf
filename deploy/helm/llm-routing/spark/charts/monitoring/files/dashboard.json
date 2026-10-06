@@ -36,7 +36,16 @@
         "refresh": 1,
         "multi": true,
         "includeAll": true,
-        "allValue": ".*"
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
       },
       {
         "name": "model",
@@ -45,11 +54,20 @@
           "type": "prometheus",
           "uid": "demo-metrics"
         },
-        "query": "label_values(llm_api_gateway_http_requests_total{monitoring_release=\"$release\"}, model)",
+        "query": "label_values({__name__=~\"llm_api_gateway_http_requests_total|stargate_active_inference_servers\",monitoring_release=\"$release\",namespace=~\"$namespace\",model!=\"\"}, model)",
         "refresh": 2,
         "multi": true,
         "includeAll": true,
-        "allValue": ".*"
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
       }
     ]
   },
@@ -82,7 +100,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "up{monitoring_release=\"$release\",namespace=~\"$namespace\"} and (time() - timestamp(up{monitoring_release=\"$release\",namespace=~\"$namespace\"}) < 45)",
+          "expr": "up{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(up{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
           "legendFormat": "{{component}} / {{pod}}"
         }
       ],
@@ -121,7 +139,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - timestamp(up{monitoring_release=\"$release\",namespace=~\"$namespace\"})",
+          "expr": "time() - timestamp(up{monitoring_release=\"$release\",namespace=~\"${namespace}\"})",
           "legendFormat": "{{component}} / {{pod}}"
         }
       ],
@@ -160,7 +178,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (model, status) (rate(llm_api_gateway_http_requests_total{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\"}[$__rate_interval]))",
+          "expr": "sum by (model, status) (rate(llm_api_gateway_http_requests_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval]))",
           "legendFormat": "{{model}} HTTP {{status}}"
         }
       ],
@@ -199,7 +217,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (status) (rate(llm_api_gateway_http_requests_total{monitoring_release=\"$release\",namespace=~\"$namespace\",status=~\"4..|5..\"}[$__rate_interval]))",
+          "expr": "sum by (status) (rate(llm_api_gateway_http_requests_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",status=~\"4..|5..\"}[$__rate_interval]))",
           "legendFormat": "HTTP {{status}}"
         }
       ],
@@ -238,7 +256,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(llm_api_gateway_http_request_duration_seconds_bucket{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(llm_api_gateway_http_request_duration_seconds_bucket{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval])))",
           "legendFormat": "{{model}}"
         }
       ],
@@ -277,7 +295,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(llm_api_gateway_stream_first_token_seconds_bucket{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(llm_api_gateway_stream_first_token_seconds_bucket{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval])))",
           "legendFormat": "{{model}}"
         }
       ],
@@ -316,7 +334,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (model, token_type, stream) (rate(llm_api_gateway_llm_tokens_total{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\",token_type=~\"prompt|completion\"}[$__rate_interval]))",
+          "expr": "sum by (model, token_type, stream) (rate(llm_api_gateway_llm_tokens_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\",token_type=~\"prompt|completion\"}[$__rate_interval]))",
           "legendFormat": "{{model}} {{token_type}} stream={{stream}}"
         }
       ],
@@ -355,7 +373,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (model, token_type, stream) (increase(llm_api_gateway_llm_tokens_total{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\",token_type=~\"prompt|completion\"}[$__range]))",
+          "expr": "sum by (model, token_type, stream) (increase(llm_api_gateway_llm_tokens_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\",token_type=~\"prompt|completion\"}[$__range]))",
           "legendFormat": "{{model}} {{token_type}} stream={{stream}}"
         }
       ],
@@ -394,7 +412,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "stargate_active_inference_servers{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\"} and (time() - timestamp(stargate_active_inference_servers{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\"}) < 45)",
+          "expr": "stargate_active_inference_servers{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"} and (time() - timestamp(stargate_active_inference_servers{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}) < 45)",
           "legendFormat": "{{model}}"
         }
       ],
@@ -433,7 +451,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (model, status) (rate(stargate_requests_total{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\"}[$__rate_interval]))",
+          "expr": "sum by (model, status) (rate(stargate_requests_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval]))",
           "legendFormat": "{{model}} {{status}}"
         }
       ],
@@ -472,7 +490,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(stargate_routing_duration_seconds_bucket{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(stargate_routing_duration_seconds_bucket{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval])))",
           "legendFormat": "{{model}}"
         }
       ],
@@ -511,7 +529,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(stargate_proxy_duration_seconds_bucket{monitoring_release=\"$release\",namespace=~\"$namespace\",model=~\"$model\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(stargate_proxy_duration_seconds_bucket{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval])))",
           "legendFormat": "{{model}}"
         }
       ],
@@ -550,7 +568,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "pylon_registration_stream_connected{monitoring_release=\"$release\",namespace=~\"$namespace\"} and (time() - timestamp(pylon_registration_stream_connected{monitoring_release=\"$release\",namespace=~\"$namespace\"}) < 45)",
+          "expr": "pylon_registration_stream_connected{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(pylon_registration_stream_connected{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
           "legendFormat": "{{pod}} / {{router}}"
         }
       ],
@@ -589,7 +607,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "pylon_reverse_tunnel_connected{monitoring_release=\"$release\",namespace=~\"$namespace\"} and (time() - timestamp(pylon_reverse_tunnel_connected{monitoring_release=\"$release\",namespace=~\"$namespace\"}) < 45)",
+          "expr": "pylon_reverse_tunnel_connected{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(pylon_reverse_tunnel_connected{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
           "legendFormat": "{{pod}} / {{router}}"
         }
       ],
@@ -628,7 +646,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "nvcf_pylon_operator_endpoints{monitoring_release=\"$release\",namespace=~\"$namespace\"} and (time() - timestamp(nvcf_pylon_operator_endpoints{monitoring_release=\"$release\",namespace=~\"$namespace\"}) < 45)",
+          "expr": "nvcf_pylon_operator_endpoints{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(nvcf_pylon_operator_endpoints{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
           "legendFormat": "{{condition}} {{status}}"
         }
       ],
@@ -667,7 +685,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "nvcf_pylon_operator_registered{monitoring_release=\"$release\",namespace=~\"$namespace\"} and (time() - timestamp(nvcf_pylon_operator_registered{monitoring_release=\"$release\",namespace=~\"$namespace\"}) < 45)",
+          "expr": "nvcf_pylon_operator_registered{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(nvcf_pylon_operator_registered{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
           "legendFormat": "{{endpoint}}"
         }
       ],
@@ -706,125 +724,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (__name__, reason) (rate({__name__=~\"nvcf_pylon_operator_(probe|scrape)_failures_total\",monitoring_release=\"$release\",namespace=~\"$namespace\"}[$__rate_interval]))",
+          "expr": "sum by (__name__, reason) (rate({__name__=~\"nvcf_pylon_operator_(probe|scrape)_failures_total\",monitoring_release=\"$release\",namespace=~\"${namespace}\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}} {{reason}}"
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      }
-    },
-    {
-      "id": 18,
-      "title": "Backend scrape health",
-      "type": "timeseries",
-      "description": "Backend-specific metrics are available in Explore. This panel verifies collection without assuming a runtime metric schema.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "demo-metrics"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 64,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "No data",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "up{monitoring_release=\"$release\",namespace=~\"$namespace\",component=\"backend\"} and (time() - timestamp(up{monitoring_release=\"$release\",namespace=~\"$namespace\",component=\"backend\"}) < 45)",
-          "legendFormat": "{{pod}}"
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      }
-    },
-    {
-      "id": 19,
-      "title": "Backend requests processing and queued",
-      "type": "timeseries",
-      "description": "llama.cpp runtime metrics. Other engines may expose different names.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "demo-metrics"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 72,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "No data",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "{__name__=~\"llamacpp[:_](requests_processing|requests_deferred)\",monitoring_release=\"$release\",namespace=~\"$namespace\"}",
-          "legendFormat": "{{pod}} {{__name__}}"
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      }
-    },
-    {
-      "id": 20,
-      "title": "Backend completion tokens / second",
-      "type": "timeseries",
-      "description": "llama.cpp runtime metrics. Other engines may expose different names.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "demo-metrics"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 72,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "tps",
-          "noValue": "No data",
-          "custom": {
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (pod) (rate({__name__=~\"llamacpp[:_]tokens_predicted_total\",monitoring_release=\"$release\",namespace=~\"$namespace\"}[$__rate_interval]))",
-          "legendFormat": "{{pod}} {{__name__}}"
         }
       ],
       "options": {

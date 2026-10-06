@@ -16,6 +16,9 @@ import time
 import urllib.parse
 import urllib.request
 
+from client import Client
+import gateway_access
+
 HERE = pathlib.Path(__file__).resolve().parent
 CHART = HERE / 'charts/monitoring'
 MAX_ARCHIVE_BYTES = 2 * 1024**3
@@ -30,8 +33,10 @@ def settings(config):
     options = config.get('monitoring', {})
     require(isinstance(options, dict), 'monitoring must be an object.')
     require(isinstance(options.get('enabled', False), bool), 'monitoring.enabled must be boolean.')
-    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy'}
+    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy', 'model'}
     require(not set(options) - allowed, 'Unknown monitoring setting: ' + ', '.join(sorted(set(options) - allowed)))
+    if 'model' in options:
+        require(isinstance(options['model'], str) and bool(options['model'].strip()), 'monitoring.model must be a nonempty model ID.')
     return options
 
 
@@ -81,17 +86,17 @@ def chart_values(recipe):
         target('gateway', 'app.kubernetes.io/name=llm-api-gateway,app.kubernetes.io/instance='+recipe.stack, 'http', 9464),
         target('router', 'app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance='+recipe.stack, 'metrics'),
         target('operator', 'app.kubernetes.io/instance='+recipe.operator, 'metrics'),
-        target('pylon', 'app.kubernetes.io/name=pylon,app.kubernetes.io/managed-by=pylon-operator', 'metrics'),
-        target('backend', 'app.kubernetes.io/instance='+recipe.glm+',app.kubernetes.io/component=model-server', 'http')]
+        target('pylon', 'app.kubernetes.io/name=pylon,app.kubernetes.io/managed-by=pylon-operator', 'metrics')]
     extra = options.get('extraTargets', [])
     require(isinstance(extra, list), 'monitoring.extraTargets must be a list.')
     names = {t['name'] for t in values['targets']} | {'monitoring-storage', 'monitoring-grafana', 'monitoring-collector'}
     for t in extra:
-        require(isinstance(t, dict) and set(t) <= {'name', 'selector', 'portName', 'port', 'path'}, 'Invalid extra monitoring target.')
+        require(isinstance(t, dict) and set(t) <= {'name', 'selector', 'portName', 'port', 'path', 'runtime'}, 'Invalid extra monitoring target.')
         require(isinstance(t.get('name'), str) and re.fullmatch(r'[a-z][a-z0-9-]*', t['name']) and t['name'] not in names, 'Monitoring target names must be unique.')
         require(isinstance(t.get('selector'), str) and t['selector'].strip() and isinstance(t.get('portName'), str) and t['portName'], 'Monitoring targets need selector and portName.')
         require(type(t.get('port', 0)) is int and 0 <= t.get('port', 0) <= 65535, 'Invalid monitoring target port.')
         require(isinstance(t.get('path', '/metrics'), str) and t.get('path', '/metrics').startswith('/'), 'Invalid metrics path.')
+        require('runtime' not in t or t['runtime'] == 'llama.cpp', 'Supported backend dashboard runtime: llama.cpp. Omit runtime for raw exporter metrics.')
         names.add(t['name'])
     values['targets'].extend(copy.deepcopy(extra))
     values['grafana']['adminSecret'] = recipe.c['releasePrefix']+'-monitoring-grafana-admin'
@@ -101,6 +106,85 @@ def chart_values(recipe):
 def image_list(recipe):
     values = chart_values(recipe)
     return [values[k]['image'] for k in ('collector', 'victoriaMetrics', 'grafana')]
+
+
+def gateway_response(client, path, payload=None):
+    """Read a bounded authenticated response over the client's verified TLS connection."""
+    require(client.context and client.key, 'Traffic verification requires verified HTTPS and a caller key.')
+    connection = client.connect()
+    connection.timeout = 180
+    deadline = time.monotonic() + 180
+    try:
+        headers = {'Authorization': 'Bearer ' + client.key}
+        if payload is not None:
+            headers['Content-Type'] = 'application/json'
+        connection.request('POST' if payload is not None else 'GET', path,
+                           json.dumps(payload) if payload is not None else None, headers)
+        response = connection.getresponse()
+        require(response.status == 200, 'Gateway monitoring request failed with HTTP ' + str(response.status) + ': ' + path)
+        body = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, 'Gateway monitoring response exceeded 180 seconds.')
+            if connection.sock:
+                connection.sock.settimeout(remaining)
+            chunk = response.read1(min(65536, 524289-len(body)))
+            if not chunk:
+                break
+            body.extend(chunk)
+            require(len(body) <= 524288, 'Gateway monitoring response exceeded 512 KiB.')
+        return bytes(body)
+    finally:
+        connection.close()
+
+
+def select_model(client, requested=None):
+    require(requested is None or (isinstance(requested, str) and bool(requested.strip())), 'Provide a nonempty model ID.')
+    listing = json.loads(gateway_response(client, '/v1/models'))
+    require(isinstance(listing, dict) and listing.get('object') == 'list' and isinstance(listing.get('data'), list),
+            'Gateway model discovery returned an invalid model list.')
+    entries = listing['data']
+    require(entries and all(isinstance(item, dict) and isinstance(item.get('id'), str) and item['id'].strip() for item in entries),
+            'Gateway model discovery returned no models or an invalid model ID.')
+    models = sorted({item['id'] for item in entries})
+    require(requested is None or requested in models, 'Requested monitoring model is absent from gateway discovery: ' + str(requested))
+    return requested if requested is not None else models[0]
+
+
+def sample_completion(client, model, stream):
+    payload = {'model': model, 'messages': [{'role': 'user', 'content': 'What is 2 plus 2? Answer briefly.'}],
+               'max_tokens': 512, 'stream': stream}
+    if stream:
+        payload['stream_options'] = {'include_usage': True}
+    body = gateway_response(client, '/v1/chat/completions', payload)
+    if stream:
+        events = []
+        done = False
+        for line in body.decode().splitlines():
+            if not line.startswith('data:'):
+                continue
+            data = line[5:].strip()
+            if data == '[DONE]':
+                done = True
+                break
+            events.append(json.loads(data))
+        require(done and events, 'Monitoring streaming request did not finish with an SSE completion marker.')
+    else:
+        events = [json.loads(body)]
+    require(all(isinstance(event, dict) and not event.get('error') for event in events), 'Monitoring completion returned an error.')
+    require(all(isinstance(event.get('choices', []), list) for event in events), 'Monitoring completion returned invalid choices.')
+    choices = [choice for event in events for choice in event.get('choices', [])]
+    require(choices and all(isinstance(choice, dict) for choice in choices), 'Monitoring completion returned no valid choices.')
+    require(any(choice.get('finish_reason') in ('stop', 'length') for choice in choices), 'Monitoring completion has no successful finish reason.')
+    output = [choice.get('delta' if stream else 'message', {}) for choice in choices]
+    require(any(isinstance(item, dict) and any(isinstance(item.get(key), str) and item[key].strip()
+                for key in ('content', 'reasoning_content', 'reasoning')) for item in output),
+            'Monitoring completion returned no content or reasoning.')
+    usage = next((event['usage'] for event in reversed(events) if event.get('usage')), None)
+    require(isinstance(usage, dict) and all(type(usage.get(key)) is int and usage[key] > 0 for key in ('prompt_tokens', 'completion_tokens')),
+            'Monitoring completion did not report positive prompt and completion token usage.')
+    return {'model': model, 'stream': stream, 'status': 200,
+            'promptTokens': usage['prompt_tokens'], 'completionTokens': usage['completion_tokens']}
 
 
 class Monitoring:
@@ -191,7 +275,26 @@ class Monitoring:
             except KeyboardInterrupt:
                 pass
 
-    def verify(self, port, traffic=False):
+    @contextlib.contextmanager
+    def traffic_client(self, port, model=None):
+        r = self.recipe
+        require(r.state.get('stack'), 'Deploy or attach to the routing stack before verifying traffic.')
+        requested = model if model is not None else settings(r.c).get('model')
+        require(requested is None or (isinstance(requested, str) and bool(requested.strip())), 'Provide a nonempty model ID.')
+        configured_key = r.c.get('apiKeyFile')
+        if configured_key is not None:
+            require(isinstance(configured_key, str) and bool(configured_key.strip()), 'apiKeyFile must name a caller-key file.')
+            existing = str(pathlib.Path(configured_key).expanduser().resolve(strict=True))
+        else:
+            existing = r.state['stack'].get('apiKeyFile')
+        url = 'https://127.0.0.1:' + str(port)
+        with r.forward(True, port):
+            access = contextlib.nullcontext(existing) if existing else gateway_access.temporary_gateway_key(r, url)
+            with access as key:
+                client = Client(url, r.work/'ca.crt', key)
+                yield client, select_model(client, requested)
+
+    def verify(self, port, traffic=False, model=None):
         require(1 <= port <= 65533, 'Monitoring verification needs three consecutive local ports.')
         r = self.recipe
         r.bound_cluster()
@@ -227,29 +330,30 @@ class Monitoring:
                         raise
                     time.sleep(min(2, remaining))
             if traffic:
-                selector = '{monitoring_release="'+self.release+'",model="GLM-5.3-UD-IQ2_M"}'
-                expressions = {
-                    'requests': 'sum(llm_api_gateway_http_requests_total'+selector+')',
-                    'durationCount': 'sum(llm_api_gateway_http_request_duration_seconds_count'+selector+')',
-                    'durationSeconds': 'sum(llm_api_gateway_http_request_duration_seconds_sum'+selector+')',
-                    'firstToken': 'sum(llm_api_gateway_stream_first_token_seconds_count'+selector+')',
-                    'firstTokenSeconds': 'sum(llm_api_gateway_stream_first_token_seconds_sum'+selector+')',
-                    'streamPromptTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="prompt",stream="true"})',
-                    'nonstreamPromptTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="prompt",stream="false"})',
-                    'streamTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="completion",stream="true"})',
-                    'nonstreamTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="completion",stream="false"})'}
-                def counters():
-                    return {name: sum(float(s['value'][1]) for s in query_metrics(expr)['data']['result']) for name, expr in expressions.items()}
-                before = counters()
-                r.verify(True, port+1)
-                deadline = time.monotonic()+75
-                while True:
-                    after = counters()
-                    if all(after[name] > before[name] for name in expressions):
-                        break
-                    require(time.monotonic() < deadline, 'Gateway request, response-duration, TTFT or prompt/completion token metrics did not increase: '+json.dumps({'before': before, 'after': after}))
-                    time.sleep(2)
-                report['traffic'] = {'before': before, 'after': after}
+                with self.traffic_client(port+1, model) as (client, selected):
+                    selector = '{monitoring_release='+json.dumps(self.release)+',model='+json.dumps(selected, ensure_ascii=False)+'}'
+                    expressions = {
+                        'requests': 'sum(llm_api_gateway_http_requests_total'+selector+')',
+                        'durationCount': 'sum(llm_api_gateway_http_request_duration_seconds_count'+selector+')',
+                        'durationSeconds': 'sum(llm_api_gateway_http_request_duration_seconds_sum'+selector+')',
+                        'firstToken': 'sum(llm_api_gateway_stream_first_token_seconds_count'+selector+')',
+                        'firstTokenSeconds': 'sum(llm_api_gateway_stream_first_token_seconds_sum'+selector+')',
+                        'streamPromptTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="prompt",stream="true"})',
+                        'nonstreamPromptTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="prompt",stream="false"})',
+                        'streamTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="completion",stream="true"})',
+                        'nonstreamTokens': 'sum(llm_api_gateway_llm_tokens_total'+selector[:-1]+',token_type="completion",stream="false"})'}
+                    def counters():
+                        return {name: sum(float(s['value'][1]) for s in query_metrics(expr)['data']['result']) for name, expr in expressions.items()}
+                    before = counters()
+                    requests = [sample_completion(client, selected, stream) for stream in (False, True)]
+                    deadline = time.monotonic()+75
+                    while True:
+                        after = counters()
+                        if all(after[name] > before[name] for name in expressions):
+                            break
+                        require(time.monotonic() < deadline, 'Gateway request, response-duration, TTFT or prompt/completion token metrics did not increase: '+json.dumps({'before': before, 'after': after}))
+                        time.sleep(2)
+                    report['traffic'] = {'model': selected, 'requests': requests, 'before': before, 'after': after}
         password = (r.work/'grafana-admin-password').read_text().strip()
         with self.forward('grafana', port+2, 3000):
             request = urllib.request.Request('http://127.0.0.1:'+str(port+2)+'/api/dashboards/uid/llm-demo',

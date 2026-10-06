@@ -32,13 +32,13 @@ python3 spark.py monitoring
 
 ## Verification
 
-After GLM is registered, allow 30 seconds for collection, then run:
+After GLM is registered, run:
 
 ```bash
 python3 spark.py verify-monitoring --verify-traffic
 ```
 
-This checks fresh scrapes, the provisioned dashboard and metric increases from real GLM requests. Results are saved in `evidence/monitoring.json`. Omit `--verify-traffic` to check collection without sending inference requests.
+The command waits up to 75 seconds for fresh scrapes, then checks the dashboard and metric increases from real GLM requests. Results are saved in `evidence/monitoring.json`. Omit `--verify-traffic` to check collection without sending inference requests.
 
 ## Dashboard
 

@@ -215,7 +215,17 @@ class Monitoring:
                     data = json.load(response)
                 require(data.get('status') == 'success', 'VictoriaMetrics query failed.')
                 return data
-            report = validate_scrapes(query_metrics(query), expected, expected_pods)
+            deadline = time.monotonic()+75
+            while True:
+                samples = query_metrics(query)
+                try:
+                    report = validate_scrapes(samples, expected, expected_pods)
+                    break
+                except RuntimeError:
+                    remaining = deadline-time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    time.sleep(min(2, remaining))
             if traffic:
                 selector = '{monitoring_release="'+self.release+'",model="GLM-5.3-UD-IQ2_M"}'
                 expressions = {

@@ -134,6 +134,59 @@ class MonitoringTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Running pods missing'):
             monitoring.validate_scrapes(result, {'pylon'}, {('pylon', 'models', 'pylon-a'), ('pylon', 'models', 'pylon-b')})
 
+    def test_verifier_waits_for_initial_collection_before_checking_dashboard(self):
+        import contextlib
+        import io
+        self.output.return_value = '{"items": []}'
+        self.recipe.verify = Mock()
+        (self.recipe.work/'grafana-admin-password').write_text('private-test-password')
+        components = {'gateway', 'router', 'operator', 'pylon', 'backend',
+                      'monitoring-storage', 'monitoring-grafana', 'monitoring-collector'}
+        responses = [
+            {'status': 'success', 'data': {'result': []}},
+            {'status': 'success', 'data': {'result': [
+                {'metric': {'component': component}, 'value': [0, '1']} for component in components]}},
+            {'dashboard': {'uid': 'llm-demo', 'panels': [{'id': 1}]}}]
+        with patch.object(self.monitor, 'forward', side_effect=lambda *args: contextlib.nullcontext()), \
+             patch.object(monitoring.urllib.request, 'urlopen', side_effect=[io.StringIO(json.dumps(r)) for r in responses]) as request, \
+             patch.object(monitoring.time, 'monotonic', side_effect=[0, 0]), \
+             patch.object(monitoring.time, 'sleep') as sleep:
+            self.monitor.verify(18000)
+
+        self.assertEqual(request.call_count, 3)
+        sleep.assert_called_once_with(2)
+        self.recipe.verify.assert_not_called()
+        report = json.loads((self.recipe.work/'evidence/monitoring.json').read_text())
+        self.assertTrue(report['passed'])
+        self.assertEqual(report['dashboardUid'], 'llm-demo')
+        self.assertEqual({s['metric']['component'] for s in report['targets']}, components)
+
+    def test_verifier_bounds_collection_wait_and_preserves_final_failure(self):
+        import contextlib
+        import io
+        self.output.return_value = '{"items": []}'
+        self.recipe.verify = Mock()
+        components = {'gateway', 'router', 'operator', 'pylon', 'backend',
+                      'monitoring-storage', 'monitoring-grafana', 'monitoring-collector'}
+        missing = {'status': 'success', 'data': {'result': []}}
+        failed = {'status': 'success', 'data': {'result': [
+            {'metric': {'component': component}, 'value': [0, '0' if component == 'gateway' else '1']}
+            for component in components]}}
+        with patch.object(self.monitor, 'forward', side_effect=lambda *args: contextlib.nullcontext()) as forward, \
+             patch.object(monitoring.urllib.request, 'urlopen', side_effect=[io.StringIO(json.dumps(r)) for r in (missing, missing, failed)]) as request, \
+             patch.object(monitoring.time, 'monotonic', side_effect=[0, 0, 74, 75]), \
+             patch.object(monitoring.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError, 'Failed scrape targets:.*gateway'):
+                self.monitor.verify(18000, traffic=True)
+
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual([call.args for call in sleep.call_args_list], [(2,), (1,)])
+        forward.assert_called_once_with('victoria-metrics', 18000, 8428)
+        self.recipe.verify.assert_not_called()
+        report = json.loads((self.recipe.work/'evidence/monitoring.json').read_text())
+        self.assertFalse(report['passed'])
+        self.assertIn('startedAt', report)
+
     def test_image_export_checks_archive_architecture_with_both_docker_clis(self):
         import io
         import tarfile
@@ -258,7 +311,7 @@ class MonitoringTests(unittest.TestCase):
                     return io.StringIO(json.dumps({'status': 'success','data': {'result': data}}))
                 with patch.object(self.monitor, 'forward', side_effect=lambda *args: contextlib.nullcontext()), \
                      patch.object(monitoring.urllib.request, 'urlopen', side_effect=response), \
-                     patch.object(monitoring.time, 'monotonic', side_effect=[0, 100]):
+                     patch.object(monitoring.time, 'monotonic', side_effect=[0, 0, 100]):
                     if stalled_metric is None:
                         self.monitor.verify(18000, traffic=True)
                     else:

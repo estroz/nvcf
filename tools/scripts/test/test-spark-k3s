@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+# shellcheck source=../spark-k3s
+source "$ROOT/tools/scripts/spark-k3s"
+PASS=0
+check() { PASS=$((PASS + 1)); printf 'PASS %s\n' "$*"; }
+reject() {
+  if ("$@") >"$WORK/rejected" 2>&1; then cat "$WORK/rejected"; fail "Expected rejection: $*"; fi
+}
+bash -s -- help < "$ROOT/tools/scripts/spark-k3s" >"$WORK/stdin-help"
+grep -q 'Usage:' "$WORK/stdin-help"
+check 'stdin execution supports read-only SSH use'
+main init --node-name spark-a --node-ip 192.0.2.11 --interface eth0 >"$WORK/plan"
+grep -q -- '--cluster-init' "$WORK/plan"
+grep -q 'Preview only' "$WORK/plan"
+check 'init preview requires no hardware, root, network or installation'
+main join --node-name spark-b --node-ip 192.0.2.12 --interface eth0 --server-ip 192.0.2.11 --token-file /missing/private-token >"$WORK/plan"
+grep -q -- '--server https://192.0.2.11:6443' "$WORK/plan"
+if grep -q -- '--cluster-init' "$WORK/plan"; then fail 'Join initialized a cluster'; fi
+check 'join preview targets the first server and does not read the token'
+reject main init --node-name spark-a --node-ip 999.0.2.1 --interface eth0
+reject main init --node-name spark-a --node-ip 192.0.2.11/24 --interface eth0
+reject main init --node-name spark-a --node-ip 127.0.0.1 --interface eth0
+reject main init --node-name 'x;id' --node-ip 192.0.2.11 --interface eth0
+reject main init --node-name
+reject main init --node-name spark-a --node-ip 192.0.2.11 --interface eth0 --server-ip 192.0.2.12
+reject main verify --nodes spark-a,spark-b,spark-c
+reject main inspect --apply
+check 'invalid arguments and accidental mode mixing fail'
+(
+  k3s() { :; }
+  reject require_clean_host
+)
+check 'existing k3s binary blocks reinstallation'
+(
+  require_host() { :; }
+  require_clean_host() { fail 'existing state'; }
+  curl() { touch "$WORK/should-not-download"; }
+  reject main init --node-name spark-a --node-ip 192.0.2.11 --interface eth0 --apply
+  [[ ! -e "$WORK/should-not-download" ]]
+)
+check 'existing state is checked before downloading'
+
+printf '#!/bin/sh\nexit 0\n' >"$WORK/installer"
+GOOD_SHA=$(shasum -a 256 "$WORK/installer" | awk '{print $1}')
+printf 'K10%064d::server:test-token-only\n' 0 >"$WORK/token"
+chmod 600 "$WORK/token"
+stat() {
+  if [[ $(uname -s) == Darwin && "$1" == -c ]]; then command stat -f '%Lp' "$3"; else command stat "$@"; fi
+}
+TOKEN_FILE="$WORK/token"
+check_token_file
+chmod 644 "$WORK/token"
+reject check_token_file
+chmod 600 "$WORK/token"
+printf 'short-token\n' >"$WORK/bad-token"
+chmod 600 "$WORK/bad-token"
+TOKEN_FILE="$WORK/bad-token"
+reject check_token_file
+check 'join requires private permissions and a secure server token'
+(
+  require_host() { :; }
+  require_clean_host() { :; }
+  curl() { cat "$WORK/installer" > "${@: -1}"; }
+  env() { touch "$WORK/should-not-install"; }
+  INSTALLER_SHA256=$(printf '%064d' 0)
+  reject main init --node-name spark-a --node-ip 192.0.2.11 --interface eth0 --apply
+  [[ ! -e "$WORK/should-not-install" ]]
+)
+check 'checksum mismatch prevents installer execution'
+(
+  require_host() { :; }
+  require_clean_host() { :; }
+  curl() { cat "$WORK/installer" > "${@: -1}"; }
+  install() { printf '%s\n' "$*" >>"$WORK/install-args"; }
+  env() {
+    [[ -z ${K3S_URL:-} && -z ${INSTALL_K3S_SKIP_START:-} ]]
+    printf '%s\n' "$@" >"$WORK/env-args"
+  }
+  INSTALLER_SHA256=$GOOD_SHA
+  export K3S_VERSION K3S_URL=https://wrong.example INSTALL_K3S_SKIP_START=true
+  main join --node-name spark-b --node-ip 192.0.2.12 --interface eth0 --server-ip 192.0.2.11 --token-file "$WORK/token" --apply >"$WORK/applied"
+  grep -q '^INSTALL_K3S_VERSION=v1.36.4+k3s1$' "$WORK/env-args"
+  grep -q -- '--token-file' "$WORK/env-args"
+  grep -q -- '-m 600' "$WORK/install-args"
+  if grep -q test-token-only "$WORK/env-args" "$WORK/applied"; then fail 'Token leaked into output/arguments'; fi
+)
+check 'mocked join preserves version, clears inherited settings, and passes a private token path'
+
+jq -n '{items: ["spark-a","spark-b","spark-c"] | map({metadata:{name:.,labels:{"node-role.kubernetes.io/control-plane":"true","node-role.kubernetes.io/etcd":"true"}},status:{conditions:[{type:"Ready",status:"True"}],nodeInfo:{kubeletVersion:"v1.36.4+k3s1",architecture:"arm64"},capacity:{"nvidia.com/gpu":"1"},allocatable:{"nvidia.com/gpu":"1"}}})}' >"$WORK/good.json"
+touch "$WORK/kubeconfig"
+kubectl() {
+  [[ "$1" == --kubeconfig && "$2" == "$WORK/kubeconfig" && "$3" == --context && "$4" == expected && "$5" == --request-timeout=30s ]] || fail 'Missing explicit Kubernetes target'
+  shift 5
+  case "$*" in
+    'get nodes -o json') cat "$FIXTURE" ;;
+    'get runtimeclass nvidia -o json') printf '{"handler":"%s"}\n' "${RUNTIME_HANDLER:-nvidia}" ;;
+    *) fail "Unexpected cluster operation: $*" ;;
+  esac
+}
+verify_fixture() { main verify --kubeconfig "$WORK/kubeconfig" --context expected --nodes spark-a,spark-b,spark-c; }
+FIXTURE="$WORK/good.json"
+verify_fixture >"$WORK/verified"
+check 'healthy fixture passes with only explicit-target read operations'
+for mutation in \
+  '.items[0].metadata.name = "other-node"' \
+  '.items[0].status.conditions[0].status = "False"' \
+  '.items[0].status.nodeInfo.kubeletVersion = "v1.35.0+k3s1"' \
+  '.items[0].status.nodeInfo.architecture = "amd64"' \
+  '.items[0].status.allocatable["nvidia.com/gpu"] = "0"' \
+  'del(.items[0].metadata.labels["node-role.kubernetes.io/etcd"])' \
+  '.items += [.items[0]]'; do
+  jq "$mutation" "$WORK/good.json" >"$WORK/bad.json"
+  FIXTURE="$WORK/bad.json"
+  reject verify_fixture
+done
+FIXTURE="$WORK/good.json"
+RUNTIME_HANDLER=runc
+reject verify_fixture
+unset RUNTIME_HANDLER
+reject main verify --kubeconfig "$WORK/kubeconfig" --context expected --nodes spark-a,spark-b
+reject main verify --kubeconfig "$WORK/kubeconfig" --context expected --nodes spark-a,spark-a,spark-c
+check 'membership, readiness, role, version, architecture, GPU and RuntimeClass failures are rejected'
+printf '%s grouped checks passed\n' "$PASS"
